@@ -1,0 +1,282 @@
+<template>
+    <SiteShell page="roadmap">
+        <div class="page-head">
+            <h1>Roadmap</h1>
+            <p class="lead">
+                The phases below are gates, not marketing dates. A phase is done
+                when its evidence exists; until then, the capability matrix says
+                so.
+            </p>
+        </div>
+
+        <div class="legend">
+            <span><i class="dot dot--done"></i>done</span>
+            <span><i class="dot dot--active"></i>active</span>
+            <span><i class="dot dot--wait"></i>planned</span>
+        </div>
+
+        <section class="notice">
+            <b>No public release yet.</b>
+            There are no installers to download. The source builds the declared
+            workbook model, the command line and the studio shell; the
+            spreadsheet engine and format exchange are still being built.
+        </section>
+
+        <ol class="phases">
+            <li data-state="done">
+                <span class="phase__id">P0</span>
+                <div>
+                    <span class="phase__state"><i class="dot dot--done"></i>done</span>
+                    <h2>Freeze the workbook model and contracts</h2>
+                    <p>
+                        Sheet identities, revisions, the project container, the
+                        API surface, stable error codes and the declared
+                        capability matrix.
+                    </p>
+                </div>
+            </li>
+            <li data-state="active">
+                <span class="phase__id">P1</span>
+                <div>
+                    <span class="phase__state"><i class="dot dot--active"></i>active</span>
+                    <h2>Workbook core and cell model</h2>
+                    <p>
+                        Create and open a project, read sheets and cells, save
+                        and reopen with the same revision, and report a real
+                        capability matrix.
+                    </p>
+                </div>
+            </li>
+            <li>
+                <span class="phase__id">P2</span>
+                <div>
+                    <span class="phase__state"><i class="dot dot--wait"></i>planned</span>
+                    <h2>Formula evaluation</h2>
+                    <p>
+                        A self-contained evaluator over A1 references, ranges
+                        and built-in functions, with cycle detection and typed
+                        errors.
+                    </p>
+                </div>
+            </li>
+            <li>
+                <span class="phase__id">P3</span>
+                <div>
+                    <span class="phase__state"><i class="dot dot--wait"></i>planned</span>
+                    <h2>Exchange and inspection</h2>
+                    <p>
+                        <code>.xlsx</code> import and export with a per-feature
+                        loss report, plus the six declared inspection checks.
+                    </p>
+                </div>
+            </li>
+            <li>
+                <span class="phase__id">P4</span>
+                <div>
+                    <span class="phase__state"><i class="dot dot--wait"></i>planned</span>
+                    <h2>Pivot aggregation and studio</h2>
+                    <p>
+                        Pivot grouping and summaries, a live cell grid in the
+                        studio, and sheet rendering to <code>svg</code>,
+                        <code>png</code> and <code>pdf</code>.
+                    </p>
+                </div>
+            </li>
+            <li>
+                <span class="phase__id">P5</span>
+                <div>
+                    <span class="phase__state"><i class="dot dot--wait"></i>planned</span>
+                    <h2>Skills acceptance and releases</h2>
+                    <p>
+                        Install the skills package in a clean environment, finish
+                        real workbook tasks, and ship the platform packages.
+                    </p>
+                </div>
+            </li>
+            <li>
+                <span class="phase__id">P6</span>
+                <div>
+                    <span class="phase__state"><i class="dot dot--wait"></i>planned</span>
+                    <h2>Hardening and wider formats</h2>
+                    <p>
+                        Large-sheet performance, accessibility, resilience around
+                        damaged files, and import work beyond the currently
+                        declared format set.
+                    </p>
+                </div>
+            </li>
+        </ol>
+
+        <section class="section">
+            <div class="section-head">
+                <h2>Working today</h2>
+                <p>What a clean checkout can actually run, separated from what is only declared.</p>
+            </div>
+            <div class="table-wrap">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Surface</th>
+                            <th>State</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Workspace build</td><td class="state"><i class="dot dot--done"></i>available</td></tr>
+                        <tr><td>Command line surface</td><td class="state"><i class="dot dot--done"></i>available</td></tr>
+                        <tr><td>Capability matrix</td><td class="state"><i class="dot dot--done"></i>available</td></tr>
+                        <tr><td>Studio shell</td><td class="state"><i class="dot dot--done"></i>available</td></tr>
+                        <tr><td>Skills package</td><td class="state"><i class="dot dot--done"></i>available</td></tr>
+                        <tr><td>Workbook parser</td><td class="state"><i class="dot dot--wait"></i>not implemented</td></tr>
+                        <tr><td>Formula engine</td><td class="state"><i class="dot dot--wait"></i>not implemented</td></tr>
+                        <tr><td>Pivot aggregates</td><td class="state"><i class="dot dot--wait"></i>not implemented</td></tr>
+                        <tr><td>Export writers</td><td class="state"><i class="dot dot--wait"></i>not implemented</td></tr>
+                        <tr><td>Cell renderer</td><td class="state"><i class="dot dot--wait"></i>not implemented</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="note">
+                Available means the surface runs. It does not mean a workbook can
+                be read, written or inspected.
+            </p>
+        </section>
+
+        <section class="section">
+            <div class="section-head">
+                <h2>Where the tests live</h2>
+            </div>
+            <p>
+                Workbook corpora, formula conformance suites, independent round
+                trips, skill tasks and large-sheet runs belong to the product test
+                suite. The shared engine keeps only basic smoke checks, so a green
+                engine build is not presented as a finished product.
+            </p>
+        </section>
+
+        <p class="cta-line">
+            Follow the work in the
+            <a href="https://github.com/nyar-os/OpenExcel" rel="noopener">
+                source repository
+            </a>
+            .
+        </p>
+    </SiteShell>
+</template>
+
+<style>
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-top: 22px;
+    color: var(--oex-muted);
+    font-size: 13px;
+}
+
+.legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.notice {
+    margin-top: 20px;
+    padding: 18px 22px;
+    border: 1px solid var(--oex-line);
+    border-left: 3px solid var(--oex-accent);
+    border-radius: var(--oex-radius);
+    background: var(--oex-surface);
+    color: var(--oex-muted);
+    font-size: 15px;
+}
+
+.notice b {
+    color: var(--oex-ink);
+}
+
+.phases {
+    display: grid;
+    gap: 14px;
+    margin: 32px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.phases li {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    gap: 16px;
+    padding: 20px 22px;
+    border: 1px solid var(--oex-line);
+    border-radius: var(--oex-radius);
+    background: var(--oex-surface);
+}
+
+.phase__id {
+    color: var(--oex-muted);
+    font-family: var(--oex-serif);
+    font-size: 20px;
+}
+
+.phase__state {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+    color: var(--oex-muted);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.phases h2 {
+    margin: 0 0 4px;
+    font-size: 20px;
+}
+
+.phases p {
+    margin: 0;
+    color: var(--oex-muted);
+    font-size: 15px;
+}
+
+.phases li[data-state="done"] {
+    border-left: 3px solid var(--oex-accent);
+}
+
+.phases li[data-state="done"] .phase__id {
+    color: var(--oex-accent);
+}
+
+.phases li[data-state="active"] {
+    border-left: 3px solid var(--oex-accent);
+    background: linear-gradient(90deg, var(--oex-accent-soft), var(--oex-surface) 55%);
+}
+
+.phases li[data-state="active"] .phase__id {
+    color: var(--oex-accent);
+}
+
+.table .dot {
+    margin-right: 8px;
+}
+
+@media (max-width: 620px) {
+    .phases li {
+        grid-template-columns: 1fr;
+        gap: 6px;
+        padding: 16px;
+    }
+}
+</style>
+
+<script client>
+export default class RoadmapPage {
+    static meta() {
+        return {
+            title: "Roadmap — OpenExcel",
+            description:
+                "The P0–P6 gates for OpenExcel: workbook model, cell core, formula evaluation, exchange and inspection, pivot aggregation, skills acceptance and hardening.",
+        };
+    }
+}
+</script>

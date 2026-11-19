@@ -1,0 +1,26 @@
+{
+    "name": "@wae/open-excel-skills",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Agent skills for OpenExcel: create, edit, template fill, review and delivery",
+    "license": "Apache-2.0",
+    "type": "module",
+    "engines": {
+        "node": ">=18"
+    },
+    "files": [
+        "skills"
+    ],
+    "keywords": [
+        "open-excel",
+        "xlsx",
+        "spreadsheet",
+        "skills",
+        "agent"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/nyar-os/OpenExcel.git",
+        "directory": "projects/packages/open-excel-skills"
+    }
+}

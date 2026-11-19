@@ -1,0 +1,1135 @@
+<template>
+    <div class="studio">
+        <header class="titlebar">
+            <div class="brand">
+                <span class="mark">X</span>
+                <div class="brand-text">
+                    <h1>OpenExcel Studio</h1>
+                    <p class="doc-line" :title="titleLine()">{{ titleLine() }}</p>
+                </div>
+                <span class="chip chip--rev" title="Workbook revision">{{ revisionLabel() }}</span>
+            </div>
+
+            <div class="commands">
+                <div class="group" role="group" aria-label="File">
+                    <span class="group-label">File</span>
+                    <div class="group-buttons">
+                        <button type="button" class="btn" data-action="new" :disabled="!hostReady">New</button>
+                        <button type="button" class="btn" data-action="open" :disabled="!hostReady">Open</button>
+                        <button type="button" class="btn" data-action="save" :disabled="!hostReady">Save</button>
+                        <button type="button" class="btn" data-action="export-toggle" :disabled="!canExport()">Export</button>
+                    </div>
+                </div>
+                <div class="group" role="group" aria-label="Document">
+                    <span class="group-label">Document</span>
+                    <div class="group-buttons">
+                        <button type="button" class="btn" data-action="close-workbook" :disabled="!hostReady || !workbook">Close workbook</button>
+                    </div>
+                </div>
+                <div class="group group--view" role="group" aria-label="View">
+                    <span class="group-label">View</span>
+                    <div class="group-buttons">
+                        <button type="button" class="btn" disabled title="Cell renderer is not implemented">Fit</button>
+                        <button type="button" class="btn" disabled title="Cell renderer is not implemented">Zoom out</button>
+                        <span class="zoom-chip">100%</span>
+                        <button type="button" class="btn" disabled title="Cell renderer is not implemented">Zoom in</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="titlebar-right">
+                <span :class="hostReady ? 'pill pill--live' : 'pill'">{{ connectionLabel() }}</span>
+                <button
+                    type="button"
+                    class="btn btn--icon"
+                    data-action="shortcuts-toggle"
+                    :aria-expanded="shortcutsOpen ? 'true' : 'false'"
+                    title="Keyboard shortcuts"
+                >?</button>
+                <button type="button" class="btn" data-action="quit" :disabled="!hostReady">Quit</button>
+            </div>
+
+            <div class="popover popover--export" v-if="exportOpen">
+                <h2 class="popover-title">Export workbook</h2>
+                <label class="field-row">
+                    <span>Format</span>
+                    <select class="select" :value="exportFormat" @change="onExportFormatChange" :disabled="!capabilities">
+                        <option v-for="target in exportTargets()" :key="target.name" :value="target.name">{{ target.name }}</option>
+                    </select>
+                </label>
+                <p class="readout" :title="exportTargetPath()">{{ exportTargetPath() }}</p>
+                <div class="popover-actions">
+                    <button type="button" class="btn" data-action="export-cancel">Cancel</button>
+                    <button type="button" class="btn btn--primary" data-action="export-run" :disabled="!canExport()">Export</button>
+                </div>
+            </div>
+
+            <div class="popover popover--shortcuts" v-if="shortcutsOpen">
+                <h2 class="popover-title">Keyboard shortcuts</h2>
+                <ul class="shortcut-list">
+                    <li v-for="item in shortcuts()" :key="item.keys">
+                        <kbd>{{ item.keys }}</kbd>
+                        <span>{{ item.label }}</span>
+                    </li>
+                </ul>
+            </div>
+        </header>
+
+        <div class="contextbar">
+            <label class="path-field">
+                <span class="path-label">Path</span>
+                <input
+                    class="path-input"
+                    data-field="path"
+                    :value="inputPath"
+                    placeholder="C:\workbooks\ledger.oexcel"
+                    spellcheck="false"
+                    @input="onPathInput"
+                />
+            </label>
+            <p class="path-hint">Type a path; the native file picker is not implemented.</p>
+            <span class="spacer"></span>
+            <span class="pill">{{ hostLabel() }}</span>
+            <span class="pill">{{ engineLabel() }}</span>
+        </div>
+
+        <div class="banner" v-if="!hostReady">
+            <b>Preview mode.</b>
+            The native window is unavailable, so no workbook can be created or opened. The shell stays empty on purpose.
+        </div>
+
+        <div class="workspace">
+            <aside class="sidebar">
+                <section class="panel">
+                    <div class="panel-head"><h2>Workbook</h2></div>
+                    <dl class="facts" v-if="workbook">
+                        <div class="fact"><dt>Title</dt><dd :title="workbook.title">{{ workbook.title }}</dd></div>
+                        <div class="fact fact--mono"><dt>Id</dt><dd :title="workbook.id">{{ workbook.id }}</dd></div>
+                        <div class="fact"><dt>Revision</dt><dd>{{ workbook.revision }}</dd></div>
+                        <div class="fact fact--mono"><dt>Path</dt><dd :title="workbookPath || 'unsaved'">{{ pathLabel() }}</dd></div>
+                        <div class="fact"><dt>Sheets</dt><dd>{{ workbook.sheets.length }}</dd></div>
+                        <div class="fact"><dt>Cells</dt><dd>{{ workbook.cells }}</dd></div>
+                    </dl>
+                    <p class="note" v-else>Nothing is open.</p>
+                </section>
+
+                <section class="panel">
+                    <div class="panel-head">
+                        <h2>Sheets</h2>
+                        <span class="count">{{ sheetCountLabel() }}</span>
+                    </div>
+                    <div class="sheet-list" v-if="sheetRows().length">
+                        <button
+                            type="button"
+                            v-for="sheet in sheetRows()"
+                            :key="sheet.id"
+                            class="sheet-row"
+                            :class="sheet.id === activeSheetId ? 'sheet-row sheet-row--active' : 'sheet-row'"
+                            :data-sheet-id="sheet.id"
+                        >
+                            <span class="sheet-index">{{ sheet.index }}</span>
+                            <span class="sheet-name">{{ sheet.name }}</span>
+                            <span class="sheet-cells">{{ sheet.cells }}</span>
+                        </button>
+                    </div>
+                    <p class="note" v-else>No sheets. A workbook has to be opened first.</p>
+                </section>
+
+                <section class="panel">
+                    <div class="panel-head"><h2>Export targets</h2></div>
+                    <ul class="status-list" v-if="exportTargets().length">
+                        <li v-for="target in exportTargets()" :key="target.name">
+                            <span class="status-dot" :class="target.supported ? 'status-dot status-dot--on' : 'status-dot'"></span>
+                            <span class="status-name">{{ target.name }}</span>
+                            <span class="status-word">{{ target.status }}</span>
+                        </li>
+                    </ul>
+                    <p class="note" v-else>No capability matrix yet.</p>
+                    <p class="note note--tight" v-if="capabilities && !anyExportSupported()">Declared targets. None are implemented yet.</p>
+                </section>
+            </aside>
+
+            <main class="canvas">
+                <div class="canvas-bar">
+                    <span class="canvas-label">Sheet</span>
+                    <b class="canvas-sheet">{{ activeSheetName() }}</b>
+                    <span class="zoom-chip">zoom 100%</span>
+                    <span class="chip chip--warn">renderer offline</span>
+                </div>
+
+                <div class="sheet">
+                    <div class="sheet-corner"></div>
+                    <div class="col-ruler">
+                        <span v-for="(letter, letterIndex) in columnLabels()" :key="letterIndex">{{ letter }}</span>
+                    </div>
+                    <div class="row-ruler">
+                        <span v-for="(row, rowIndex) in rowLabels()" :key="rowIndex">{{ row }}</span>
+                    </div>
+                    <div class="sheet-surface">
+                        <div class="surface-frame" v-if="workbook">
+                            <p class="surface-title">{{ activeSheetName() }}</p>
+                            <div class="frame-meta">
+                                <span>{{ activeSheetCells() }} cells</span>
+                                <span>{{ revisionLabel() }}</span>
+                            </div>
+                            <p class="surface-hint">The cell renderer is not implemented, so no values are painted.</p>
+                        </div>
+                        <div class="surface-empty" v-else>
+                            <span class="surface-mark">X</span>
+                            <p class="surface-title">No workbook open</p>
+                            <p class="surface-hint">Create a workbook or open a project file. Nothing is drawn until the engine exists.</p>
+                            <div class="surface-actions">
+                                <button type="button" class="btn" data-action="new" :disabled="!hostReady">New workbook</button>
+                                <button type="button" class="btn" data-action="open" :disabled="!hostReady">Open path</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tools">
+                    <span class="tool-label">Tools</span>
+                    <button type="button" class="btn btn--tool" disabled title="Not implemented">Select</button>
+                    <button type="button" class="btn btn--tool" disabled title="Not implemented">Edit</button>
+                    <button type="button" class="btn btn--tool" disabled title="Not implemented">Fill</button>
+                    <button type="button" class="btn btn--tool" disabled title="Not implemented">Chart</button>
+                    <span class="spacer"></span>
+                    <span class="chip chip--code">capability/not-implemented</span>
+                </div>
+            </main>
+
+            <aside class="inspector">
+                <div class="tabs" role="tablist" aria-label="Inspector">
+                    <button
+                        type="button"
+                        class="tab"
+                        role="tab"
+                        data-tab="properties"
+                        :class="tab === 'properties' ? 'tab tab--active' : 'tab'"
+                        :aria-selected="tab === 'properties' ? 'true' : 'false'"
+                    >Properties</button>
+                    <button
+                        type="button"
+                        class="tab"
+                        role="tab"
+                        data-tab="capabilities"
+                        :class="tab === 'capabilities' ? 'tab tab--active' : 'tab'"
+                        :aria-selected="tab === 'capabilities' ? 'true' : 'false'"
+                    >Capabilities</button>
+                    <button
+                        type="button"
+                        class="tab"
+                        role="tab"
+                        data-tab="diagnostics"
+                        :class="tab === 'diagnostics' ? 'tab tab--active' : 'tab'"
+                        :aria-selected="tab === 'diagnostics' ? 'true' : 'false'"
+                    >Diagnostics</button>
+                </div>
+
+                <div class="tab-panel" role="tabpanel" v-if="tab === 'properties'">
+                    <div class="card-title">Workbook</div>
+                    <dl class="facts" v-if="workbook">
+                        <div class="fact"><dt>Title</dt><dd>{{ workbook.title }}</dd></div>
+                        <div class="fact fact--mono"><dt>Id</dt><dd :title="workbook.id">{{ workbook.id }}</dd></div>
+                        <div class="fact"><dt>Revision</dt><dd>{{ workbook.revision }}</dd></div>
+                        <div class="fact fact--mono"><dt>Path</dt><dd>{{ pathLabel() }}</dd></div>
+                        <div class="fact"><dt>Sheets</dt><dd>{{ workbook.sheets.length }}</dd></div>
+                        <div class="fact"><dt>Cells</dt><dd>{{ workbook.cells }}</dd></div>
+                    </dl>
+                    <p class="note" v-else>Nothing is open.</p>
+
+                    <div class="card">
+                        <div class="card-title">Selection</div>
+                        <p class="note">No range selected. Selection needs the cell renderer.</p>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-title">Inspection</div>
+                        <button type="button" class="btn btn--wide" data-action="inspect" :disabled="!hostReady || !workbook">Run inspection</button>
+                        <p class="note note--tight">{{ inspectionLabel() }}</p>
+                    </div>
+                </div>
+
+                <div class="tab-panel" role="tabpanel" v-if="tab === 'capabilities'">
+                    <dl class="facts" v-if="capabilities">
+                        <div class="fact"><dt>Engine</dt><dd>{{ capabilities.engine.package }}</dd></div>
+                        <div class="fact"><dt>Version</dt><dd>{{ capabilities.engine.version }}</dd></div>
+                        <div class="fact"><dt>Project</dt><dd>{{ capabilities.project }}</dd></div>
+                    </dl>
+                    <div class="count-grid" v-if="capabilities">
+                        <div class="count"><b>{{ mapCount(capabilities.formats) }}</b><span>Formats declared</span></div>
+                        <div class="count"><b>{{ flagCount('import') }}</b><span>Importable</span></div>
+                        <div class="count"><b>{{ flagCount('edit') }}</b><span>Editable</span></div>
+                        <div class="count"><b>{{ flagCount('export') }}</b><span>Exportable</span></div>
+                        <div class="count"><b>{{ flagCount('inspect') }}</b><span>Inspectable</span></div>
+                        <div class="count"><b>{{ mapCount(capabilities.checks) }}</b><span>Checks</span></div>
+                        <div class="count"><b>{{ mapCount(capabilities.renderers) }}</b><span>Renderers</span></div>
+                        <div class="count"><b>{{ mapCount(capabilities.exportTargets) }}</b><span>Export targets</span></div>
+                    </div>
+                    <div class="chip-row" v-if="capabilities">
+                        <span class="chip">project: {{ capabilities.project }}</span>
+                        <span class="chip">checks: {{ mapStatus(capabilities.checks) }}</span>
+                        <span class="chip">renderers: {{ mapStatus(capabilities.renderers) }}</span>
+                        <span class="chip">targets: {{ mapStatus(capabilities.exportTargets) }}</span>
+                    </div>
+                    <p class="note" v-if="!capabilities">Connect to the native host to read the capability matrix.</p>
+                    <p class="note">Every status is read from the host. A file suffix is not a support claim.</p>
+                </div>
+
+                <div class="tab-panel" role="tabpanel" v-if="tab === 'diagnostics'">
+                    <dl class="facts">
+                        <div class="fact"><dt>Host</dt><dd>{{ hostLabel() }}</dd></div>
+                        <div class="fact"><dt>Connection</dt><dd>{{ connectionLabel() }}</dd></div>
+                        <div class="fact"><dt>Requests sent</dt><dd>{{ requestCount }}</dd></div>
+                        <div class="fact fact--mono"><dt>Last request</dt><dd>{{ lastRequestLabel() }}</dd></div>
+                        <div class="fact fact--mono"><dt>Error code</dt><dd>{{ lastErrorCode || "none" }}</dd></div>
+                        <div class="fact"><dt>Message</dt><dd :title="lastErrorMessage">{{ lastErrorMessage || "none" }}</dd></div>
+                    </dl>
+
+                    <div class="card-title">Request log</div>
+                    <ul class="log" v-if="requestLog.length">
+                        <li v-for="entry in requestLog" :key="entry.id">
+                            <span class="log-type" :title="entry.type">{{ entry.type }}</span>
+                            <span class="log-outcome" :class="entry.ok ? 'log-outcome log-outcome--ok' : 'log-outcome'">{{ entry.outcome }}</span>
+                            <span class="log-time">{{ entry.time }}</span>
+                        </li>
+                    </ul>
+                    <p class="note" v-else>No requests yet.</p>
+
+                    <div class="button-row">
+                        <button type="button" class="btn btn--small" data-action="copy-log" :disabled="!requestLog.length">Copy</button>
+                        <button type="button" class="btn btn--small" data-action="clear-log" :disabled="!requestLog.length">Clear</button>
+                    </div>
+                    <p class="note">Clipboard access is guarded. Copying can be blocked in this window.</p>
+                </div>
+            </aside>
+        </div>
+
+        <footer class="statusbar">
+            <span :class="errorText ? 'status status--error' : 'status'">{{ errorText || status }}</span>
+            <span class="spacer"></span>
+            <span>{{ summaryText() }}</span>
+            <span class="sep"></span>
+            <span>{{ hostLabel() }}</span>
+            <span class="sep"></span>
+            <span>{{ engineLabel() }}</span>
+            <span class="sep"></span>
+            <span>zoom 100%</span>
+        </footer>
+
+        <div class="toast" :class="toastTone === 'error' ? 'toast toast--error' : 'toast'" v-if="toastVisible" role="status">
+            <div class="toast-body">
+                <b class="toast-title">{{ toastTitle }}</b>
+                <p class="toast-message">{{ toastMessage }}</p>
+            </div>
+            <button type="button" class="btn btn--small" data-action="toast-dismiss">Dismiss</button>
+        </div>
+    </div>
+</template>
+
+<style>
+.studio { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--oex-bg); color: var(--oex-ink); }
+
+.titlebar { position: relative; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--oex-line); background: var(--oex-surface); box-shadow: var(--oex-shadow-soft); }
+.brand { display: flex; align-items: center; gap: 9px; min-width: 210px; }
+.brand-text { min-width: 0; }
+.brand h1 { font-size: 14px; line-height: 1.15; }
+.doc-line { margin: 1px 0 0; max-width: 260px; overflow: hidden; color: var(--oex-muted); font-family: var(--oex-mono); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.mark { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 7px; background: var(--oex-accent); color: var(--oex-bg); font-family: var(--oex-serif); font-size: 16px; }
+
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--oex-line); border-radius: 999px; background: var(--oex-surface); color: var(--oex-muted); font-size: 10px; white-space: nowrap; }
+.chip--rev { font-family: var(--oex-mono); font-size: 10px; }
+.chip--warn { border-color: var(--oex-warn); background: var(--oex-warn-soft); color: var(--oex-warn); }
+.chip--code { font-family: var(--oex-mono); }
+
+.commands { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.group { display: flex; align-items: center; gap: 6px; padding-right: 10px; border-right: 1px solid var(--oex-line); }
+.group:last-child { padding-right: 0; border-right: 0; }
+.group-label { color: var(--oex-muted); font-size: 9px; letter-spacing: 0.09em; text-transform: uppercase; }
+.group-buttons { display: flex; align-items: center; gap: 4px; }
+
+.btn { padding: 5px 10px; border: 1px solid var(--oex-line); border-radius: 6px; background: var(--oex-surface); color: var(--oex-ink); font-size: 12px; line-height: 1.4; white-space: nowrap; }
+.btn:hover:enabled { border-color: var(--oex-accent); }
+.btn:disabled { background: var(--oex-surface-2); color: var(--oex-muted); cursor: not-allowed; opacity: 0.55; }
+.btn--primary { border-color: var(--oex-accent); background: var(--oex-accent); color: var(--oex-bg); }
+.btn--primary:hover:enabled { background: var(--oex-accent); }
+.btn--icon { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; }
+.btn--small { padding: 3px 8px; font-size: 11px; }
+.btn--tool { padding: 3px 9px; font-size: 11px; }
+.btn--wide { width: 100%; }
+
+.titlebar-right { display: flex; align-items: center; gap: 6px; }
+.pill { padding: 3px 9px; border: 1px solid var(--oex-line); border-radius: 999px; background: var(--oex-surface-2); color: var(--oex-muted); font-size: 10px; letter-spacing: 0.04em; white-space: nowrap; }
+.pill--live { border-color: var(--oex-accent); background: var(--oex-accent-soft); color: var(--oex-accent); }
+
+.popover { position: absolute; top: calc(100% + 6px); right: 12px; z-index: 20; width: 300px; padding: 12px; border: 1px solid var(--oex-line); border-radius: 8px; background: var(--oex-surface); box-shadow: var(--oex-shadow); }
+.popover--export { right: 96px; display: flex; flex-direction: column; gap: 8px; }
+.popover-title { margin: 0; color: var(--oex-muted); font-family: "Segoe UI", system-ui, sans-serif; font-size: 10px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; }
+.field-row { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.field-row span { flex: none; color: var(--oex-muted); }
+.select { flex: 1; min-width: 0; padding: 4px 6px; border: 1px solid var(--oex-line); border-radius: 6px; background: var(--oex-surface); font-size: 12px; }
+.readout { margin: 0; padding: 5px 7px; overflow: hidden; border: 1px solid var(--oex-line); border-radius: 6px; background: var(--oex-surface-2); font-family: var(--oex-mono); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.popover-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.shortcut-list { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; }
+.shortcut-list li { display: flex; align-items: center; justify-content: space-between; gap: 14px; color: var(--oex-muted); font-size: 11px; }
+kbd { padding: 1px 5px; border: 1px solid var(--oex-line); border-radius: 4px; background: var(--oex-surface-2); color: var(--oex-ink); font-family: var(--oex-mono); font-size: 10px; }
+
+.contextbar { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--oex-line); background: var(--oex-surface); }
+.path-field { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; max-width: 520px; }
+.path-label { flex: none; color: var(--oex-muted); font-size: 9px; letter-spacing: 0.09em; text-transform: uppercase; }
+.path-input { flex: 1; min-width: 120px; padding: 5px 8px; border: 1px solid var(--oex-line); border-radius: 6px; background: var(--oex-surface); font-family: var(--oex-mono); font-size: 11px; user-select: text; }
+.path-hint { margin: 0; overflow: hidden; color: var(--oex-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.spacer { flex: 1; }
+
+.banner { padding: 6px 12px; border-bottom: 1px solid var(--oex-line); background: var(--oex-warn-soft); color: var(--oex-warn); font-size: 11px; }
+.banner b { color: var(--oex-ink); }
+
+.workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(0, 1fr) 300px; }
+
+.sidebar { min-height: 0; overflow: auto; border-right: 1px solid var(--oex-line); background: var(--oex-surface-2); }
+.panel { padding: 11px 12px; border-bottom: 1px solid var(--oex-line); }
+.panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.panel-head h2 { color: var(--oex-muted); font-family: "Segoe UI", system-ui, sans-serif; font-size: 10px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; }
+.count { color: var(--oex-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+
+.facts { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.fact { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; }
+.fact dt { flex: none; color: var(--oex-muted); }
+.fact dd { margin: 0; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.fact--mono dd { font-family: var(--oex-mono); font-size: 10px; }
+.note { margin: 0; color: var(--oex-muted); font-size: 11px; }
+.note--tight { margin-top: 6px; }
+
+.sheet-list { display: flex; flex-direction: column; gap: 4px; }
+.sheet-row { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 7px; padding: 5px 7px; border: 1px solid var(--oex-line); border-radius: 6px; background: var(--oex-surface); font-size: 11px; text-align: left; }
+.sheet-row:hover { border-color: var(--oex-accent); }
+.sheet-row--active { border-color: var(--oex-accent); background: var(--oex-accent-soft); }
+.sheet-index, .sheet-cells { color: var(--oex-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.sheet-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.status-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.status-list li { display: grid; grid-template-columns: 8px 1fr auto; align-items: center; gap: 7px; font-size: 11px; }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--oex-line); }
+.status-dot--on { background: var(--oex-accent); }
+.status-name { font-family: var(--oex-mono); font-size: 10px; }
+.status-word { color: var(--oex-muted); font-size: 10px; }
+
+.canvas { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; padding: 10px 12px 8px; background: radial-gradient(circle at 1px 1px, var(--oex-line) 1px, transparent 0) 0 0 / 22px 22px, var(--oex-bg); }
+.canvas-bar { display: flex; align-items: center; gap: 8px; padding: 0 2px; }
+.canvas-label { color: var(--oex-muted); font-size: 9px; letter-spacing: 0.09em; text-transform: uppercase; }
+.canvas-sheet { min-width: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.zoom-chip { padding: 2px 7px; border: 1px solid var(--oex-line); border-radius: 999px; background: var(--oex-surface); color: var(--oex-muted); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.sheet { flex: 1; min-height: 0; display: grid; grid-template-columns: 26px minmax(0, 1fr); grid-template-rows: 20px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--oex-line); border-radius: 8px; background: var(--oex-surface); box-shadow: var(--oex-shadow-soft); }
+.sheet-corner { border-right: 1px solid var(--oex-line); border-bottom: 1px solid var(--oex-line); background: var(--oex-surface-2); }
+.col-ruler { display: grid; grid-template-columns: repeat(8, 1fr); border-bottom: 1px solid var(--oex-line); background: var(--oex-surface-2); }
+.col-ruler span { display: grid; place-items: center; border-right: 1px solid var(--oex-line); color: var(--oex-muted); font-size: 9px; }
+.col-ruler span:last-child { border-right: 0; }
+.row-ruler { display: grid; grid-template-rows: repeat(12, 1fr); border-right: 1px solid var(--oex-line); background: var(--oex-surface-2); }
+.row-ruler span { display: grid; place-items: center; border-bottom: 1px solid var(--oex-line); color: var(--oex-muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+.row-ruler span:last-child { border-bottom: 0; }
+.sheet-surface { position: relative; min-height: 0; background-image: linear-gradient(to right, var(--oex-line) 1px, transparent 1px), linear-gradient(to bottom, var(--oex-line) 1px, transparent 1px); background-size: calc(100% / 8) 100%, 100% calc(100% / 12); }
+
+.surface-empty, .surface-frame { position: absolute; inset: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; padding: 16px; overflow: auto; border: 1px dashed var(--oex-line); border-radius: 6px; background: var(--oex-bg); text-align: center; }
+.surface-frame { border-style: solid; background: var(--oex-surface); }
+.surface-mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; background: var(--oex-accent-soft); color: var(--oex-accent); font-family: var(--oex-serif); font-size: 17px; }
+.surface-title { margin: 0; font-size: 13px; font-weight: 600; }
+.surface-hint { max-width: 360px; margin: 0; color: var(--oex-muted); font-size: 11px; }
+.surface-actions { display: flex; gap: 6px; margin-top: 4px; }
+.frame-meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+.frame-meta span { padding: 2px 7px; border: 1px solid var(--oex-line); border-radius: 999px; color: var(--oex-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+
+.tools { display: flex; align-items: center; gap: 5px; padding: 0 2px; }
+.tool-label { margin-right: 2px; color: var(--oex-muted); font-size: 9px; letter-spacing: 0.09em; text-transform: uppercase; }
+
+.inspector { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--oex-line); background: var(--oex-surface); }
+.tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--oex-line); }
+.tab { padding: 5px 9px; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; background: transparent; color: var(--oex-muted); font-size: 11px; }
+.tab:hover { color: var(--oex-ink); }
+.tab--active { margin-bottom: -1px; border-color: var(--oex-line); background: var(--oex-bg); color: var(--oex-ink); }
+.tab-panel { display: flex; flex-direction: column; gap: 9px; min-height: 0; padding: 11px 12px; overflow: auto; }
+
+.card { padding: 9px 10px; border: 1px solid var(--oex-line); border-radius: 7px; background: var(--oex-bg); }
+.card-title { color: var(--oex-muted); font-family: "Segoe UI", system-ui, sans-serif; font-size: 10px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; }
+
+.count-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.count { padding: 6px 8px; border: 1px solid var(--oex-line); border-radius: 6px; background: var(--oex-bg); }
+.count b { display: block; font-size: 13px; font-variant-numeric: tabular-nums; }
+.count span { color: var(--oex-muted); font-size: 10px; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.log { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.log li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 3px 6px; border: 1px solid var(--oex-line); border-radius: 5px; background: var(--oex-bg); font-size: 10px; }
+.log-type { overflow: hidden; font-family: var(--oex-mono); text-overflow: ellipsis; white-space: nowrap; }
+.log-outcome { color: var(--oex-danger); font-size: 9px; letter-spacing: 0.04em; text-transform: uppercase; }
+.log-outcome--ok { color: var(--oex-accent); }
+.log-time { color: var(--oex-muted); font-variant-numeric: tabular-nums; }
+.button-row { display: flex; gap: 5px; }
+
+.statusbar { display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-top: 1px solid var(--oex-line); background: var(--oex-surface); color: var(--oex-muted); font-size: 10px; }
+.status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status--error { color: var(--oex-danger); }
+.sep { width: 1px; height: 10px; background: var(--oex-line); }
+
+.toast { position: fixed; right: 16px; bottom: 40px; z-index: 50; display: flex; align-items: flex-start; gap: 10px; width: 300px; padding: 10px 12px; border: 1px solid var(--oex-line); border-left: 3px solid var(--oex-accent); border-radius: 8px; background: var(--oex-surface); box-shadow: var(--oex-shadow); }
+.toast--error { border-left-color: var(--oex-danger); }
+.toast-body { min-width: 0; flex: 1; }
+.toast-title { display: block; font-size: 11px; }
+.toast-message { margin: 2px 0 0; overflow-wrap: anywhere; color: var(--oex-muted); font-size: 11px; }
+
+.btn:focus-visible, .tab:focus-visible, .sheet-row:focus-visible, .path-input:focus-visible, .select:focus-visible { outline: 2px solid var(--oex-accent); outline-offset: 1px; }
+
+@media (max-width: 1180px) {
+    .workspace { grid-template-columns: 240px minmax(0, 1fr) 260px; }
+}
+
+@media (max-width: 1100px) {
+    .group--view { display: none; }
+}
+
+@media (max-width: 1000px) {
+    .workspace { grid-template-columns: 240px minmax(0, 1fr); }
+    .inspector { display: none; }
+    .group-label { display: none; }
+}
+
+@media (max-width: 820px) {
+    .workspace { grid-template-columns: minmax(0, 1fr); }
+    .sidebar { display: none; }
+    .path-hint { display: none; }
+    .brand { min-width: 0; }
+    .group { padding-right: 6px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .studio *, .studio *::before, .studio *::after { transition: none !important; animation: none !important; }
+}
+</style>
+
+<script client>
+export default class StudioPage {
+    hostReady = false;
+    status = "Starting";
+    errorText = "";
+    inputPath = "";
+    workbookPath = "";
+    workbook = null;
+    capabilities = null;
+    handle = 0;
+    activeSheetId = "";
+    tab = "properties";
+    exportOpen = false;
+    exportFormat = "";
+    shortcutsOpen = false;
+    inspectionText = "";
+    requestCount = 0;
+    lastRequestType = "";
+    lastRequestId = "";
+    lastErrorCode = "";
+    lastErrorMessage = "";
+    requestLog = [];
+    logSeq = 0;
+    toastVisible = false;
+    toastTone = "info";
+    toastTitle = "";
+    toastMessage = "";
+    toastTimer = null;
+    seq = 0;
+    pending = {};
+
+    onMount() {
+        // Static render (build-time SSR) has no window; the client mount below
+        // takes over in the WebView or a regular browser tab.
+        if (typeof window === "undefined") {
+            return;
+        }
+        const webview = window.chrome && window.chrome.webview;
+        if (webview) {
+            this.hostReady = true;
+            webview.addEventListener("message", (event) => this.onHostMessage(event));
+            void this.start();
+        } else {
+            this.hostReady = false;
+            this.status = "Preview mode — native window unavailable";
+        }
+        document.addEventListener("click", (event) => void this.onClick(event));
+        window.addEventListener("keydown", (event) => this.onKeyDown(event));
+    }
+
+    titleLine() {
+        if (this.workbook) {
+            return this.workbookPath ? this.workbookPath : this.workbook.title + " · unsaved";
+        }
+        return this.workbookPath || "no workbook open";
+    }
+
+    pathLabel() {
+        return this.workbookPath || (this.workbook ? "unsaved" : "no path");
+    }
+
+    revisionLabel() {
+        return this.workbook ? "r" + this.workbook.revision : "no revision";
+    }
+
+    hostLabel() {
+        return this.hostReady ? "native host" : "preview";
+    }
+
+    connectionLabel() {
+        return this.hostReady ? "Native host" : "Preview";
+    }
+
+    engineLabel() {
+        if (!this.capabilities) {
+            return "engine not connected";
+        }
+        if (this.capabilities.project === "unsupported") {
+            return "engine not connected";
+        }
+        return this.capabilities.engine.package + " " + this.capabilities.engine.version;
+    }
+
+    canExport() {
+        return this.hostReady && this.workbook !== null && this.capabilities !== null;
+    }
+
+    exportTargetPath() {
+        const path = this.inputPath.trim() || this.workbookPath;
+        return path || "no target path set";
+    }
+
+    activeSheet() {
+        if (!this.workbook) {
+            return null;
+        }
+        const sheets = this.workbook.sheets;
+        for (const sheet of sheets) {
+            if (sheet.id === this.activeSheetId) {
+                return sheet;
+            }
+        }
+        return null;
+    }
+
+    activeSheetName() {
+        const sheet = this.activeSheet();
+        if (sheet) {
+            return sheet.name;
+        }
+        return this.workbook ? "No sheet selected" : "No sheet";
+    }
+
+    activeSheetCells() {
+        const sheet = this.activeSheet();
+        return sheet ? sheet.cells : 0;
+    }
+
+    sheetCountLabel() {
+        return this.workbook ? this.workbook.sheets.length + " total" : "none";
+    }
+
+    sheetRows() {
+        if (!this.workbook) {
+            return [];
+        }
+        return this.workbook.sheets.map((sheet, position) => ({
+            id: sheet.id,
+            index: sheet.index + 1 > 0 ? sheet.index + 1 : position + 1,
+            name: sheet.name,
+            cells: sheet.cells,
+        }));
+    }
+
+    summaryText() {
+        if (!this.workbook) {
+            return "no workbook";
+        }
+        return "rev " + this.workbook.revision + " · " + this.workbook.sheets.length + " sheets · " + this.workbook.cells + " cells";
+    }
+
+    columnLabels() {
+        const labels = [];
+        for (let index = 0; index < 8; index += 1) {
+            labels.push(String.fromCharCode(65 + index));
+        }
+        return labels;
+    }
+
+    rowLabels() {
+        const labels = [];
+        for (let index = 1; index <= 12; index += 1) {
+            labels.push(index);
+        }
+        return labels;
+    }
+
+    mapCount(map) {
+        return map ? Object.keys(map).length : 0;
+    }
+
+    flagCount(flag) {
+        if (!this.capabilities || !this.capabilities.formats) {
+            return 0;
+        }
+        const formats = this.capabilities.formats;
+        let total = 0;
+        for (const name of Object.keys(formats)) {
+            const entry = formats[name];
+            if (entry && entry[flag]) {
+                total += 1;
+            }
+        }
+        return total;
+    }
+
+    mapStatus(map) {
+        if (!map) {
+            return "none";
+        }
+        const names = Object.keys(map);
+        if (!names.length) {
+            return "none";
+        }
+        const status = map[names[0]];
+        for (const name of names) {
+            if (map[name] !== status) {
+                return "mixed";
+            }
+        }
+        return status;
+    }
+
+    exportTargets() {
+        if (!this.capabilities || !this.capabilities.exportTargets) {
+            return [];
+        }
+        const targets = this.capabilities.exportTargets;
+        return Object.keys(targets).map((name) => ({
+            name,
+            status: targets[name],
+            supported: targets[name] === "supported",
+        }));
+    }
+
+    anyExportSupported() {
+        const targets = this.exportTargets();
+        for (const target of targets) {
+            if (target.supported) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    shortcuts() {
+        return [
+            { keys: "Ctrl/Cmd+N", label: "New workbook" },
+            { keys: "Ctrl/Cmd+O", label: "Open workbook" },
+            { keys: "Ctrl/Cmd+S", label: "Save workbook" },
+            { keys: "Ctrl/Cmd+E", label: "Export panel" },
+            { keys: "Ctrl/Cmd+W", label: "Close workbook" },
+            { keys: "Ctrl+1/2/3", label: "Inspector tabs" },
+            { keys: "Esc", label: "Dismiss" },
+        ];
+    }
+
+    inspectionLabel() {
+        return this.inspectionText || "No inspection has run.";
+    }
+
+    lastRequestLabel() {
+        if (!this.lastRequestType) {
+            return "none";
+        }
+        return this.lastRequestId + " · " + this.lastRequestType;
+    }
+
+    clock() {
+        const now = new Date();
+        const pad = (value) => (value < 10 ? "0" + value : String(value));
+        return pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+    }
+
+    record(type, outcome) {
+        const entry = { id: "log-" + ++this.logSeq, type, outcome, ok: outcome === "ok", time: this.clock() };
+        this.requestLog = [entry].concat(this.requestLog).slice(0, 8);
+    }
+
+    async start() {
+        try {
+            await this.rpc("ready", {});
+            const response = await this.rpc("capabilities", {});
+            this.capabilities = response.capabilities || null;
+            const targets = this.exportTargets();
+            if (targets.length) {
+                this.exportFormat = targets[0].name;
+            }
+            this.status = "Connected";
+            this.errorText = "";
+        } catch (error) {
+            this.fail(error);
+        }
+    }
+
+    rpc(type, payload) {
+        const webview = window.chrome && window.chrome.webview;
+        if (!webview) {
+            this.record(type, "error");
+            return Promise.reject(new Error("native window unavailable"));
+        }
+        const id = "q" + ++this.seq;
+        this.requestCount += 1;
+        this.lastRequestType = type;
+        this.lastRequestId = id;
+        return new Promise((resolve, reject) => {
+            this.pending[id] = { type, resolve, reject };
+            webview.postMessage(JSON.stringify(Object.assign({ type, id }, payload || {})));
+        });
+    }
+
+    onHostMessage(event) {
+        let data = event.data;
+        if (typeof data === "string") {
+            try {
+                data = JSON.parse(data);
+            } catch {
+                return;
+            }
+        }
+        if (!data || typeof data !== "object" || typeof data.id !== "string") {
+            return;
+        }
+        const entry = this.pending[data.id];
+        if (!entry) {
+            return;
+        }
+        delete this.pending[data.id];
+        if (typeof data.type === "string" && data.type.endsWith("Error")) {
+            this.record(entry.type, "error");
+            entry.reject(new Error(data.message || data.type));
+        } else {
+            this.record(entry.type, "ok");
+            entry.resolve(data);
+        }
+    }
+
+    errorCode(message) {
+        const match = /^([a-z][a-z0-9-]*\/[a-z0-9-]+)/i.exec(message);
+        return match ? match[1] : "";
+    }
+
+    fail(error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.lastErrorCode = this.errorCode(message);
+        this.lastErrorMessage = message;
+        this.errorText = message;
+        this.status = "Failed";
+        this.showToast("error", this.lastErrorCode || "Request failed", message);
+    }
+
+    showToast(tone, title, message) {
+        this.toastTone = tone;
+        this.toastTitle = title;
+        this.toastMessage = message;
+        this.toastVisible = true;
+        if (this.toastTimer) {
+            clearTimeout(this.toastTimer);
+        }
+        this.toastTimer = setTimeout(() => {
+            this.toastVisible = false;
+            this.toastTimer = null;
+        }, 7000);
+    }
+
+    dismissToast() {
+        if (this.toastTimer) {
+            clearTimeout(this.toastTimer);
+            this.toastTimer = null;
+        }
+        this.toastVisible = false;
+    }
+
+    closePopovers() {
+        this.exportOpen = false;
+        this.shortcutsOpen = false;
+    }
+
+    adopt(response, path) {
+        this.handle = response.handle || 0;
+        this.workbook = response.workbook || null;
+        this.workbookPath = path;
+        const sheets = this.workbook ? this.workbook.sheets : [];
+        this.activeSheetId = sheets.length ? sheets[0].id : "";
+        this.inspectionText = "";
+        this.errorText = "";
+    }
+
+    async create() {
+        if (!this.hostReady) {
+            this.fail("Native host is not connected.");
+            return;
+        }
+        const response = await this.rpc("workbook.create", { request: { title: "Untitled workbook" } });
+        this.adopt(response, "");
+        this.status = "Workbook created";
+    }
+
+    async open() {
+        if (!this.hostReady) {
+            this.fail("Native host is not connected.");
+            return;
+        }
+        const path = this.inputPath.trim();
+        if (!path) {
+            this.fail("Type a workbook path before opening.");
+            return;
+        }
+        const response = await this.rpc("workbook.open", { path });
+        this.adopt(response, path);
+        this.status = "Workbook opened";
+    }
+
+    async save() {
+        if (!this.hostReady) {
+            this.fail("Native host is not connected.");
+            return;
+        }
+        const path = this.inputPath.trim() || this.workbookPath;
+        if (!path) {
+            this.fail("Type a target path before saving.");
+            return;
+        }
+        if (!this.handle) {
+            this.fail("No workbook handle. Nothing can be saved.");
+            return;
+        }
+        const response = await this.rpc("workbook.save", { handle: this.handle, path, overwrite: true });
+        const report = response.report || {};
+        this.workbookPath = path;
+        this.status = "Saved " + (report.bytes || 0) + " bytes at r" + (report.revision || 0);
+        this.errorText = "";
+    }
+
+    async exportCurrent() {
+        const format = this.exportFormat;
+        const target = this.inputPath.trim() || this.workbookPath;
+        if (!this.workbook || !this.handle) {
+            this.fail("Open or create a workbook before exporting.");
+            return;
+        }
+        if (!format) {
+            this.fail("No export target is declared.");
+            return;
+        }
+        if (!target) {
+            this.fail("Type a target path before exporting.");
+            return;
+        }
+        this.exportOpen = false;
+        await this.rpc("workbook.export", { handle: this.handle, format, target, overwrite: true });
+        this.status = "Export response received";
+    }
+
+    async closeWorkbook() {
+        if (!this.hostReady) {
+            this.fail("Native host is not connected.");
+            return;
+        }
+        if (!this.workbook) {
+            this.fail("No workbook is open.");
+            return;
+        }
+        await this.rpc("workbook.close", { handle: this.handle });
+        this.handle = 0;
+        this.workbook = null;
+        this.workbookPath = "";
+        this.activeSheetId = "";
+        this.inspectionText = "";
+        this.status = "Workbook closed";
+    }
+
+    async quit() {
+        if (!this.hostReady) {
+            this.fail("Native host is not connected.");
+            return;
+        }
+        this.closePopovers();
+        await this.rpc("close", {});
+    }
+
+    async inspect() {
+        if (!this.handle) {
+            this.fail("No workbook handle. Nothing can be inspected.");
+            return;
+        }
+        try {
+            const response = await this.rpc("workbook.inspect", { handle: this.handle });
+            const report = response.report || {};
+            const findings = report.issues ? report.issues.length : 0;
+            this.inspectionText = "Inspection returned " + findings + " finding(s).";
+            this.status = "Inspection finished";
+        } catch (error) {
+            this.fail(error);
+            this.inspectionText = "Inspection failed. " + this.errorText;
+        }
+    }
+
+    async copyLog() {
+        if (!this.requestLog.length) {
+            return;
+        }
+        const lines = this.requestLog.map((entry) => entry.time + " " + entry.type + " " + entry.outcome);
+        try {
+            if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                this.showToast("error", "Clipboard unavailable", "This window does not expose the clipboard API.");
+                return;
+            }
+            await navigator.clipboard.writeText(lines.join("\n"));
+            this.showToast("info", "Log copied", this.requestLog.length + " entries copied.");
+        } catch {
+            this.showToast("error", "Clipboard blocked", "The window refused clipboard access.");
+        }
+    }
+
+    onPathInput(event) {
+        this.inputPath = event.target.value;
+    }
+
+    onExportFormatChange(event) {
+        this.exportFormat = event.target.value;
+    }
+
+    isTyping(target) {
+        if (!target || !target.tagName) {
+            return false;
+        }
+        const tag = target.tagName;
+        return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable === true;
+    }
+
+    onKeyDown(event) {
+        if (event.key === "Escape") {
+            if (this.exportOpen) {
+                this.exportOpen = false;
+                return;
+            }
+            if (this.shortcutsOpen) {
+                this.shortcutsOpen = false;
+                return;
+            }
+            if (this.toastVisible) {
+                this.dismissToast();
+            }
+            return;
+        }
+        const modifier = event.ctrlKey || event.metaKey;
+        if (!modifier) {
+            return;
+        }
+        const key = event.key.toLowerCase();
+        if (key === "w") {
+            event.preventDefault();
+            void this.closeWorkbook().catch((error) => this.fail(error));
+            return;
+        }
+        if (this.isTyping(event.target)) {
+            return;
+        }
+        if (key === "n") {
+            event.preventDefault();
+            void this.create().catch((error) => this.fail(error));
+        } else if (key === "o") {
+            event.preventDefault();
+            void this.open().catch((error) => this.fail(error));
+        } else if (key === "s") {
+            event.preventDefault();
+            void this.save().catch((error) => this.fail(error));
+        } else if (key === "e") {
+            event.preventDefault();
+            this.exportOpen = !this.exportOpen;
+            this.shortcutsOpen = false;
+        } else if (key === "1") {
+            event.preventDefault();
+            this.tab = "properties";
+        } else if (key === "2") {
+            event.preventDefault();
+            this.tab = "capabilities";
+        } else if (key === "3") {
+            event.preventDefault();
+            this.tab = "diagnostics";
+        }
+    }
+
+    async onClick(event) {
+        const target = event.target;
+        if (!target || !target.closest) {
+            return;
+        }
+        const actionEl = target.closest("[data-action]");
+        if (actionEl && actionEl.dataset.action) {
+            try {
+                await this.runAction(actionEl.dataset.action);
+            } catch (error) {
+                this.fail(error);
+            }
+            return;
+        }
+        const tabEl = target.closest("[data-tab]");
+        if (tabEl && tabEl.dataset.tab) {
+            this.tab = tabEl.dataset.tab;
+            return;
+        }
+        const sheetEl = target.closest("[data-sheet-id]");
+        if (sheetEl && sheetEl.dataset.sheetId) {
+            this.activeSheetId = sheetEl.dataset.sheetId;
+        }
+    }
+
+    async runAction(action) {
+        if (action === "new") {
+            return this.create();
+        }
+        if (action === "open") {
+            return this.open();
+        }
+        if (action === "save") {
+            return this.save();
+        }
+        if (action === "export-toggle") {
+            this.exportOpen = !this.exportOpen;
+            this.shortcutsOpen = false;
+            return;
+        }
+        if (action === "export-run") {
+            return this.exportCurrent();
+        }
+        if (action === "export-cancel") {
+            this.exportOpen = false;
+            return;
+        }
+        if (action === "shortcuts-toggle") {
+            this.shortcutsOpen = !this.shortcutsOpen;
+            this.exportOpen = false;
+            return;
+        }
+        if (action === "close-workbook") {
+            return this.closeWorkbook();
+        }
+        if (action === "inspect") {
+            return this.inspect();
+        }
+        if (action === "quit") {
+            return this.quit();
+        }
+        if (action === "toast-dismiss") {
+            this.dismissToast();
+            return;
+        }
+        if (action === "copy-log") {
+            return this.copyLog();
+        }
+        if (action === "clear-log") {
+            this.requestLog = [];
+        }
+    }
+}
+</script>
