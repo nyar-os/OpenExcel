@@ -9,6 +9,7 @@
 
 mod csv;
 mod error;
+mod eval;
 mod inspect;
 mod model;
 mod reference;
@@ -105,7 +106,9 @@ pub fn create(request: &Value) -> Result<Value, ServiceError> {
             format!("template `{template}` is not available; this build starts from `blank`"),
         ));
     }
-    let handle = store::insert(Project::blank(title), None);
+    let mut project = Project::blank(title);
+    eval::recalculate(&mut project);
+    let handle = store::insert(project, None);
     Ok(json!({ "handle": handle, "workbook": store::with(handle, |entry| summary_json(handle, entry))? }))
 }
 
@@ -114,7 +117,7 @@ pub fn open(path: &Path) -> Result<Value, ServiceError> {
     let bytes = fs::read(path).map_err(|error| ServiceError::io(format!("failed to read {}: {error}", path.display())))?;
     let extension = path.extension().and_then(|extension| extension.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
     let title = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Workbook").to_owned();
-    let project = match extension.as_str() {
+    let mut project = match extension.as_str() {
         "oexcel" => read_project_json(&bytes)?,
         "xlsx" | "xlsm" => xlsx::read_project(&path.display().to_string(), &bytes, title)?,
         "csv" | "tsv" => {
@@ -125,6 +128,7 @@ pub fn open(path: &Path) -> Result<Value, ServiceError> {
         "" => return Err(ServiceError::unsupported("unknown")),
         other => return Err(ServiceError::unsupported(other)),
     };
+    eval::recalculate(&mut project);
     let handle = store::insert(project, Some(path.to_path_buf()));
     Ok(json!({ "handle": handle, "workbook": store::with(handle, |entry| summary_json(handle, entry))? }))
 }
@@ -187,6 +191,9 @@ pub fn inspect(handle: u64, checks: Option<Vec<String>>) -> Result<Value, Servic
 /// Writes one open workbook to an export target.
 pub fn export(handle: u64, format: &str, target: &Path, overwrite: bool) -> Result<Value, ServiceError> {
     let (project, revision) = store::with(handle, |entry| (entry.project.clone(), entry.revision))?;
+    // Export always projects freshly evaluated values, never a stale cache.
+    let mut project = project;
+    eval::recalculate(&mut project);
     let format = format.trim().to_ascii_lowercase();
     let (bytes, losses, editable) = match format.as_str() {
         "csv" => {
@@ -249,7 +256,7 @@ fn json_projection(project: &Project) -> Value {
             "name": sheet.name,
             "cells": sheet.cells.iter().filter(|cell| !cell.is_empty()).map(|cell| json!({
                 "address": cell.reference,
-                "value": primitive(&cell.value),
+                "value": primitive(&eval::value_of(cell)),
                 "formula": cell.formula,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
@@ -321,7 +328,7 @@ fn html_projection(project: &Project) -> String {
                 }
                 html.push('>');
                 if let Some(cell) = cell {
-                    html.push_str(&escape_html(&cell.value.display_text()).replace('\n', "<br>"));
+                    html.push_str(&escape_html(&eval::value_of(cell).display_text()).replace('\n', "<br>"));
                 }
                 html.push_str("</td>");
             }
@@ -363,7 +370,12 @@ fn verify_xlsx(project: &Project, bytes: &[u8]) -> Result<(), ServiceError> {
             )));
         }
         for (expected, actual) in written.cells.iter().zip(&read.cells) {
-            if expected.reference != actual.reference || expected.value != actual.value || expected.formula != actual.formula {
+            // Formula cells carry their result in `computed`/`cached`, so compare
+            // what a reader sees rather than the optional literal fallback.
+            if expected.reference != actual.reference
+                || eval::value_of(expected) != eval::value_of(actual)
+                || expected.formula != actual.formula
+            {
                 return Err(ServiceError::io(format!(
                     "the written XLSX package changed cell `{}` on sheet `{}`",
                     expected.reference, written.name
@@ -394,6 +406,7 @@ pub fn edit(handle: u64, request: &Value) -> Result<Value, ServiceError> {
             apply_operation(&mut project, operation)?;
         }
         project.normalize();
+        eval::recalculate(&mut project);
         entry.project = project;
         entry.revision += 1;
         Ok(json!({ "revision": entry.revision, "workbook": summary_json(handle, entry) }))

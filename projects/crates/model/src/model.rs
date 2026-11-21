@@ -181,7 +181,7 @@ impl Sheet {
     pub fn set_cell(&mut self, cell: Cell) {
         match self.cells.binary_search_by_key(&(cell.row, cell.column), |entry| (entry.row, entry.column)) {
             Ok(index) => {
-                if cell.is_empty() {
+                if cell.is_blank() {
                     self.cells.remove(index);
                 }
                 else {
@@ -189,7 +189,7 @@ impl Sheet {
                 }
             }
             Err(index) => {
-                if !cell.is_empty() {
+                if !cell.is_blank() {
                     self.cells.insert(index, cell);
                 }
             }
@@ -198,7 +198,8 @@ impl Sheet {
 
     /// Writes a value and optional formula at a one-based row and column.
     pub fn write_cell(&mut self, row: u32, column: u32, value: CellValue, formula: Option<String>, cached: Option<CellValue>) {
-        let cell = Cell { reference: format_reference(row, column), row, column, value, formula, cached, style: None };
+        let cell =
+            Cell { reference: format_reference(row, column), row, column, value, formula, cached, style: None, computed: None };
         self.set_cell(cell);
     }
 
@@ -261,7 +262,7 @@ impl Sheet {
         }
         self.cells.sort_by_key(|cell| (cell.row, cell.column));
         self.cells.dedup_by_key(|cell| (cell.row, cell.column));
-        self.cells.retain(|cell| !cell.is_empty());
+        self.cells.retain(|cell| !cell.is_blank());
     }
 }
 
@@ -299,18 +300,28 @@ pub struct Cell {
     /// Formula source with the leading `=` when the cell is a formula cell.
     #[serde(default)]
     pub formula: Option<String>,
-    /// Cached formula result.
+    /// Cached formula result of the source writer.
     #[serde(default)]
     pub cached: Option<CellValue>,
     /// Resolved visual style.
     #[serde(default)]
     pub style: Option<CellStyle>,
+    /// Result of the most recent evaluation of `formula`.
+    ///
+    /// Projects written before the evaluator existed simply omit the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub computed: Option<CellValue>,
 }
 
 impl Cell {
     /// Whether the cell carries neither a value nor a formula.
     pub fn is_empty(&self) -> bool {
         matches!(self.value, CellValue::Empty) && self.formula.is_none()
+    }
+
+    /// Whether the cell carries nothing at all, not even a visual style.
+    pub fn is_blank(&self) -> bool {
+        self.is_empty() && self.style.as_ref().is_none_or(CellStyle::is_empty)
     }
 }
 

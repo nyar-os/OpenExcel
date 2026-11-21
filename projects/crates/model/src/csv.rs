@@ -101,6 +101,7 @@ pub fn project_from_csv(title: impl Into<String>, text: &str, delimiter: char) -
                 formula: None,
                 cached: None,
                 style: None,
+                computed: None,
             });
         }
     }
@@ -131,7 +132,12 @@ pub fn write(sheet: &Sheet, delimiter: char) -> String {
     for row in 1..=bounds.end_row {
         let mut cells = Vec::new();
         for column in 1..=bounds.end_column {
-            cells.push(escape(&sheet.cell(row, column).map(|cell| cell.value.display_text()).unwrap_or_default(), delimiter));
+            // Delimited text has no formula channel, so a formula projects its
+            // freshly evaluated value.
+            cells.push(escape(
+                &sheet.cell(row, column).map(|cell| crate::eval::value_of(cell).display_text()).unwrap_or_default(),
+                delimiter,
+            ));
         }
         output.push_str(&cells.join(&delimiter.to_string()));
         output.push('\n');
