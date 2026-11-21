@@ -352,6 +352,7 @@ fn exports_write_evaluated_formula_values() {
                 { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "value": 2 },
                 { "op": "cell.set", "sheet": "Sheet1", "reference": "A2", "formula": "=A1*3" },
                 { "op": "cell.set", "sheet": "Sheet1", "reference": "B1", "formula": "=1/0" },
+                { "op": "format.set", "sheet": "Sheet1", "range": "D5", "style": { "bold": true } },
             ]
         }),
     )
@@ -383,6 +384,7 @@ fn exports_write_evaluated_formula_values() {
     assert_eq!(sheet.cell(2, 1).expect("A2").formula.as_deref(), Some("=A1*3"));
     assert_eq!(sheet.cell(2, 1).expect("A2").cached, Some(CellValue::number(6.0)));
     assert_eq!(sheet.cell(1, 2).expect("B1").cached, Some(CellValue::error("#DIV/0!")));
+    assert_eq!(sheet.cell(5, 4).and_then(|cell| cell.style.as_ref()).and_then(|style| style.bold), Some(true));
 
     crate::close(handle).expect("close");
     for path in [csv_path, json_path, xlsx_path] {

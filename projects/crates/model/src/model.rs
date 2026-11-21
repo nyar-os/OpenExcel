@@ -208,24 +208,36 @@ impl Sheet {
         self.cells.retain(|cell| !range.contains(cell.row, cell.column));
     }
 
-    /// Last row that carries a cell or a merge boundary.
+    /// Last row that carries content or a merge boundary.
     pub fn last_row(&self) -> u32 {
-        self.cells.iter().map(|cell| cell.row).chain(self.merged.iter().map(|range| range.end_row)).max().unwrap_or(0)
+        self.cells
+            .iter()
+            .filter(|cell| !cell.is_empty())
+            .map(|cell| cell.row)
+            .chain(self.merged.iter().map(|range| range.end_row))
+            .max()
+            .unwrap_or(0)
     }
 
-    /// Last column that carries a cell or a merge boundary.
+    /// Last column that carries content or a merge boundary.
     pub fn last_column(&self) -> u32 {
-        self.cells.iter().map(|cell| cell.column).chain(self.merged.iter().map(|range| range.end_column)).max().unwrap_or(0)
+        self.cells
+            .iter()
+            .filter(|cell| !cell.is_empty())
+            .map(|cell| cell.column)
+            .chain(self.merged.iter().map(|range| range.end_column))
+            .max()
+            .unwrap_or(0)
     }
 
-    /// Rectangle covered by cells and merges, when the sheet is not empty.
+    /// Rectangle covered by content and merges, when the sheet is not empty.
     pub fn actual_range(&self) -> Option<CellRange> {
-        if self.cells.is_empty() && self.merged.is_empty() {
+        let last_row = self.last_row();
+        let last_column = self.last_column();
+        if last_row == 0 && last_column == 0 {
             return None;
         }
-        let last_row = self.last_row().max(1);
-        let last_column = self.last_column().max(1);
-        Some(CellRange::between(1, 1, last_row, last_column))
+        Some(CellRange::between(1, 1, last_row.max(1), last_column.max(1)))
     }
 
     /// Rectangle an inspector should use: the declared dimension, else the actual cells.
