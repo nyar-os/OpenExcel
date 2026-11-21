@@ -164,6 +164,16 @@ fn workbook_recalc(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &report)
 }
 
+/// Searches evaluated values and formula sources of one open workbook.
+#[function]
+fn workbook_find(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let raw = text(&ctx, 1)?;
+    let request = parse_json(&raw)?;
+    let hits = open_excel_workbook::find(handle, &request).map_err(fail)?;
+    respond(&ctx, &hits)
+}
+
 /// Renders one sheet of an open workbook as SVG.
 #[function]
 fn workbook_render(ctx: CallContext) -> Result<JsValue> {
@@ -302,6 +312,13 @@ impl IpcHandler for WorkbookIpcHandler {
                 Ok(report) => reply(id, "recalcResult", json!({ "report": report })),
                 Err(message) => failure(id, "recalcError", message),
             },
+            "workbook.find" => {
+                let request = value.get("request").cloned().unwrap_or(Value::Null);
+                match call_find(handle_of(&value), &request) {
+                    Ok(hits) => reply(id, "findResult", json!({ "hits": hits })),
+                    Err(message) => failure(id, "findError", message),
+                }
+            }
             "workbook.render" => {
                 let request = value.get("request").cloned().unwrap_or_else(|| json!({}));
                 match call_render(handle_of(&value), &request) {
@@ -387,6 +404,10 @@ fn call_range(handle: u64, request: &Value) -> std::result::Result<Value, String
 
 fn call_recalc(handle: u64) -> std::result::Result<Value, String> {
     open_excel_workbook::recalculate(handle).map_err(service_failure)
+}
+
+fn call_find(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    open_excel_workbook::find(handle, request).map_err(service_failure)
 }
 
 fn call_render(handle: u64, request: &Value) -> std::result::Result<Value, String> {
@@ -648,6 +669,7 @@ register_module![
     workbook_cell,
     workbook_range,
     workbook_recalc,
+    workbook_find,
     workbook_render,
     workbook_export,
     workbook_close,
