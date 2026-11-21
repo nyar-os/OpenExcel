@@ -3,8 +3,9 @@
  *
  * They assert shell semantics only: one stable error code for unimplemented
  * capabilities, a session that closes idempotently, synchronous argument
- * validation, and a format registry that classifies the whole family. No
- * workbook, renderer or import behaviour is claimed here.
+ * validation, a format registry that classifies the whole family, and one
+ * structural edit that needs the native engine. No renderer or import behaviour
+ * is claimed here.
  */
 
 import assert from 'node:assert/strict';
@@ -163,4 +164,33 @@ test('format registry classifies the workbook format family', () => {
     assert.equal(formatFromPath('Ledger.XLSX'), 'xlsx');
     assert.equal(formatFromPath('sheet.numbers'), undefined);
     assert.equal(formatFromPath('no-extension'), undefined);
+});
+
+test('a native addon can insert a row and move its references', { skip: installed ? false : 'a built addon is not installed' }, async (context) => {
+    const excel = new OpenExcel();
+    const created = await excel.create({ title: 'Structure' });
+    const seeded = await excel.edit(created, {
+        operations: [
+            { op: 'cell.set', sheet: 'Sheet1', reference: 'A1', value: 1 },
+            { op: 'cell.set', sheet: 'Sheet1', reference: 'A2', value: 2 },
+            { op: 'cell.set', sheet: 'Sheet1', reference: 'B2', formula: '=A2' },
+        ],
+    });
+    let edited;
+    try {
+        edited = await excel.edit(seeded.workbook, { operations: [{ op: 'row.insert', sheet: 'Sheet1', row: 2 }] });
+    } catch (error) {
+        if (error instanceof OpenExcelError && error.code === 'object/unsupported' && error.message.includes('row.insert')) {
+            context.skip('the installed addon predates `row.insert`');
+            await excel.dispose();
+            return;
+        }
+        throw error;
+    }
+    assert.equal(edited.revision, 2);
+    const moved = await excel.cell(edited.workbook, { sheet: 'Sheet1', address: 'A3' });
+    assert.equal(moved.value, 2);
+    const formula = await excel.cell(edited.workbook, { sheet: 'Sheet1', address: 'B3' });
+    assert.equal(formula.formula, '=A3');
+    await excel.dispose();
 });

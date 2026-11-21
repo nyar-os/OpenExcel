@@ -530,6 +530,142 @@ cli
     });
 
 cli
+    .command('row', 'cli.cmd.row')
+    .option('--sheet <name>', 'cli.opt.sheet')
+    .option('--insert <row>', 'cli.opt.insert-row')
+    .option('--delete <row>', 'cli.opt.delete-row')
+    .option('--count <n>', 'cli.opt.count')
+    .option('--out <file>', 'cli.opt.out')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const insert = text(options, 'insert');
+        const remove = text(options, 'delete');
+        if ((insert === undefined) === (remove === undefined)) {
+            ctx.fail('open-excel.cli.row-action-required', {
+                message: 'exactly one of `--insert <row>` or `--delete <row>` is required',
+            });
+            return 2;
+        }
+        const rawRow = (insert ?? remove ?? '').trim();
+        const row = /^\d+$/.test(rawRow) ? Number(rawRow) : Number.NaN;
+        if (!Number.isInteger(row) || row < 1 || row > 1_048_576) {
+            ctx.fail('open-excel.cli.row-invalid', {
+                message: '`--insert`/`--delete` must be a one-based row between 1 and 1048576',
+            });
+            return 2;
+        }
+        const rawCount = text(options, 'count');
+        const count = rawCount === undefined ? 1 : /^\d+$/.test(rawCount.trim()) ? Number(rawCount.trim()) : Number.NaN;
+        if (!Number.isInteger(count) || count < 1) {
+            ctx.fail('open-excel.cli.count-invalid', { message: '`--count` must be a positive integer' });
+            return 2;
+        }
+        if (row + count - 1 > 1_048_576) {
+            ctx.fail('open-excel.cli.row-band-invalid', {
+                message: `rows ${row}..${row + count - 1} leave the sheet at row 1048576`,
+            });
+            return 2;
+        }
+        const sheet = text(options, 'sheet') ?? 'Sheet1';
+        const operation: EditOperation =
+            insert !== undefined
+                ? { op: 'row.insert', sheet, row, count }
+                : { op: 'row.delete', sheet, row, count };
+        const label = `${insert !== undefined ? 'inserted' : 'deleted'} ${count} row${count === 1 ? '' : 's'} at ${row} in ${sheet}`;
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const result = await excel.edit(workbook, { operations: [operation] });
+            const out = text(options, 'out');
+            if (out !== undefined) {
+                const saved = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
+                ctx.emitResult({ ...result, saved }, `${label} revision=${saved.revision} saved=${out}`);
+                return;
+            }
+            ctx.emitResult(result, `${label} revision=${result.revision}`);
+        });
+        return 0;
+    });
+
+cli
+    .command('column', 'cli.cmd.column')
+    .option('--sheet <name>', 'cli.opt.sheet')
+    .option('--insert <column>', 'cli.opt.insert-column')
+    .option('--delete <column>', 'cli.opt.delete-column')
+    .option('--count <n>', 'cli.opt.count')
+    .option('--out <file>', 'cli.opt.out')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const insert = text(options, 'insert');
+        const remove = text(options, 'delete');
+        if ((insert === undefined) === (remove === undefined)) {
+            ctx.fail('open-excel.cli.column-action-required', {
+                message: 'exactly one of `--insert <column>` or `--delete <column>` is required',
+            });
+            return 2;
+        }
+        const rawColumn = (insert ?? remove ?? '').trim();
+        let column: number | string;
+        if (/^\d+$/.test(rawColumn)) {
+            column = Number(rawColumn);
+            if (column < 1 || column > 16_384) {
+                ctx.fail('open-excel.cli.column-invalid', {
+                    message: '`--insert`/`--delete` must be a one-based column between 1 and 16384 or a letter',
+                });
+                return 2;
+            }
+        }
+        else if (/^[A-Za-z]{1,3}$/.test(rawColumn)) {
+            column = rawColumn;
+        }
+        else {
+            ctx.fail('open-excel.cli.column-invalid', {
+                message: '`--insert`/`--delete` must be a one-based column between 1 and 16384 or a letter',
+            });
+            return 2;
+        }
+        const rawCount = text(options, 'count');
+        const count = rawCount === undefined ? 1 : /^\d+$/.test(rawCount.trim()) ? Number(rawCount.trim()) : Number.NaN;
+        if (!Number.isInteger(count) || count < 1) {
+            ctx.fail('open-excel.cli.count-invalid', { message: '`--count` must be a positive integer' });
+            return 2;
+        }
+        if (typeof column === 'number' && column + count - 1 > 16_384) {
+            ctx.fail('open-excel.cli.column-band-invalid', {
+                message: `columns ${column}..${column + count - 1} leave the sheet at column 16384`,
+            });
+            return 2;
+        }
+        const sheet = text(options, 'sheet') ?? 'Sheet1';
+        const operation: EditOperation =
+            insert !== undefined
+                ? { op: 'column.insert', sheet, column, count }
+                : { op: 'column.delete', sheet, column, count };
+        const label = `${insert !== undefined ? 'inserted' : 'deleted'} ${count} column${count === 1 ? '' : 's'} at ${rawColumn} in ${sheet}`;
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const result = await excel.edit(workbook, { operations: [operation] });
+            const out = text(options, 'out');
+            if (out !== undefined) {
+                const saved = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
+                ctx.emitResult({ ...result, saved }, `${label} revision=${saved.revision} saved=${out}`);
+                return;
+            }
+            ctx.emitResult(result, `${label} revision=${result.revision}`);
+        });
+        return 0;
+    });
+
+cli
     .command('sheet', 'cli.cmd.sheet')
     .option('--add <name>', 'cli.opt.add')
     .option('--rename <name>', 'cli.opt.rename')

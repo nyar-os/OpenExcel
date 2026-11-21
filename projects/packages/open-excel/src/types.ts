@@ -392,6 +392,45 @@ export type EditOperation =
       }
     | { readonly op: 'sheet.setVisibility'; readonly sheet: string; readonly visibility: SheetVisibility }
     | {
+          /**
+           * Inserts `count` empty rows before `row`, moving cells, merged ranges,
+           * frozen panes, row heights, column widths and local formula references.
+           */
+          readonly op: 'row.insert';
+          readonly sheet: string;
+          /** One-based row the new rows appear before. */
+          readonly row: number;
+          /** Number of rows to insert; defaults to 1. */
+          readonly count?: number;
+      }
+    | {
+          /** Deletes `count` rows starting at `row`; the band must stay inside the sheet. */
+          readonly op: 'row.delete';
+          readonly sheet: string;
+          /** One-based first row to delete. */
+          readonly row: number;
+          /** Number of rows to delete; defaults to 1. */
+          readonly count?: number;
+      }
+    | {
+          /** Inserts `count` empty columns before `column`, moving every column-bearing field. */
+          readonly op: 'column.insert';
+          readonly sheet: string;
+          /** One-based column number or a column letter such as `B`. */
+          readonly column: number | string;
+          /** Number of columns to insert; defaults to 1. */
+          readonly count?: number;
+      }
+    | {
+          /** Deletes `count` columns starting at `column`; the band must stay inside the sheet. */
+          readonly op: 'column.delete';
+          readonly sheet: string;
+          /** One-based column number or a column letter such as `B`. */
+          readonly column: number | string;
+          /** Number of columns to delete; defaults to 1. */
+          readonly count?: number;
+      }
+    | {
           /** Replaces text inside `range` and reports the replacement count. */
           readonly op: 'cell.replaceText';
           readonly sheet: string;
