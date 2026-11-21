@@ -118,6 +118,39 @@ fn workbook_inspect(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &report)
 }
 
+/// Returns the summary of one open workbook.
+#[function]
+fn workbook_summary(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let report = open_excel_workbook::summary(handle).map_err(fail)?;
+    respond(&ctx, &report)
+}
+
+/// Applies a JSON edit request to one open workbook.
+#[function]
+fn workbook_edit(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let raw = text(&ctx, 1)?;
+    let request = parse_json(&raw)?;
+    let report = open_excel_workbook::edit(handle, &request).map_err(fail)?;
+    respond(&ctx, &report)
+}
+
+/// Renders one sheet of an open workbook as SVG.
+#[function]
+fn workbook_render(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let request = match ctx.args().get(1) {
+        Some(value) if !value.is_undefined()? => {
+            let raw = value.as_string()?;
+            parse_json(&raw)?
+        }
+        _ => json!({}),
+    };
+    let report = open_excel_workbook::render(handle, &request).map_err(fail)?;
+    respond(&ctx, &report)
+}
+
 /// Writes one open workbook to an export target.
 #[function]
 fn workbook_export(ctx: CallContext) -> Result<JsValue> {
@@ -212,6 +245,24 @@ impl IpcHandler for WorkbookIpcHandler {
                     Err(message) => failure(id, "inspectError", message),
                 }
             }
+            "workbook.summary" => match call_summary(handle_of(&value)) {
+                Ok(summary) => reply(id, "summaryResult", json!({ "workbook": summary })),
+                Err(message) => failure(id, "summaryError", message),
+            },
+            "workbook.edit" => {
+                let request = value.get("request").cloned().unwrap_or(Value::Null);
+                match call_edit(handle_of(&value), &request) {
+                    Ok(report) => reply(id, "editResult", report),
+                    Err(message) => failure(id, "editError", message),
+                }
+            }
+            "workbook.render" => {
+                let request = value.get("request").cloned().unwrap_or_else(|| json!({}));
+                match call_render(handle_of(&value), &request) {
+                    Ok(report) => reply(id, "renderResult", report),
+                    Err(message) => failure(id, "renderError", message),
+                }
+            }
             "workbook.export" => {
                 let format = value.get("format").and_then(Value::as_str).unwrap_or("").trim().to_string();
                 let target = value.get("target").and_then(Value::as_str).unwrap_or("").trim().to_string();
@@ -224,7 +275,10 @@ impl IpcHandler for WorkbookIpcHandler {
                     Err(message) => failure(id, "exportError", message),
                 }
             }
-            "workbook.close" => failure(id, "closeError", "workbook/not-found: no workbook is open".to_string()),
+            "workbook.close" => match call_close(handle_of(&value)) {
+                Ok(()) => reply(id, "closeResult", json!({ "closed": true })),
+                Err(message) => failure(id, "closeError", message),
+            },
             _ => IpcOutcome::Ignored,
         }
     }
@@ -267,6 +321,22 @@ fn call_inspect(handle: u64, checks: Option<Vec<String>>) -> std::result::Result
 
 fn call_export(handle: u64, format: &str, target: &str, overwrite: bool) -> std::result::Result<Value, String> {
     open_excel_workbook::export(handle, format, Path::new(target), overwrite).map_err(service_failure)
+}
+
+fn call_summary(handle: u64) -> std::result::Result<Value, String> {
+    open_excel_workbook::summary(handle).map_err(service_failure)
+}
+
+fn call_edit(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    open_excel_workbook::edit(handle, request).map_err(service_failure)
+}
+
+fn call_render(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    open_excel_workbook::render(handle, request).map_err(service_failure)
+}
+
+fn call_close(handle: u64) -> std::result::Result<(), String> {
+    open_excel_workbook::close(handle).map_err(service_failure)
 }
 
 fn platform_name() -> &'static str {
@@ -515,6 +585,9 @@ register_module![
     workbook_open,
     workbook_save,
     workbook_inspect,
+    workbook_summary,
+    workbook_edit,
+    workbook_render,
     workbook_export,
     workbook_close,
     open_gui,
