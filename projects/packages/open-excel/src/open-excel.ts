@@ -10,13 +10,21 @@ import { OpenExcelError } from './errors.js';
 import { formatFromPath, type WorkbookFormat, type WorkbookIntent } from './formats.js';
 import * as service from './service.js';
 import type {
+    EditRequest,
+    EditResult,
+    ExportOptions,
+    ExportReport,
     InspectOptions,
     InspectReport,
     OpenExcelCapabilities,
     OpenExcelOptions,
+    SaveOptions,
+    SaveReport,
+    SvgRender,
     Workbook,
     WorkbookCreateOptions,
     WorkbookInput,
+    WorkbookRenderOptions,
 } from './types.js';
 
 /** Workbook session. One instance may open several workbooks. */
@@ -25,6 +33,7 @@ export class OpenExcel {
     readonly locale: string;
     private closed = false;
     private readonly handles = new Set<number>();
+    private readonly workbookHandles = new Map<string, number>();
 
     constructor(options: OpenExcelOptions = {}) {
         this.locale = options.locale ?? 'en';
@@ -58,7 +67,7 @@ export class OpenExcel {
             template: options.template,
             locale: options.locale ?? this.locale,
         });
-        this.handles.add(created.handle);
+        this.track(created.handle, created.workbook);
         return created.workbook;
     }
 
@@ -83,7 +92,7 @@ export class OpenExcel {
             );
         }
         const opened = service.open(input.path);
-        this.handles.add(opened.handle);
+        this.track(opened.handle, opened.workbook);
         return opened.workbook;
     }
 
@@ -96,6 +105,49 @@ export class OpenExcel {
         } finally {
             service.close(opened.handle);
         }
+    }
+
+    /** Writes one tracked workbook to a native project path. */
+    async save(workbook: Workbook | string, options: SaveOptions): Promise<SaveReport> {
+        this.assertActive();
+        if (options === undefined || typeof options.target !== 'string' || options.target.length === 0) {
+            throw new OpenExcelError('session/argument-invalid', '`save` needs a non-empty `target` path');
+        }
+        return service.save(this.handleOf(workbook), options.target, options.overwrite ?? false);
+    }
+
+    /** Reads the current summary of one tracked workbook. */
+    async summary(workbook: Workbook | string): Promise<Workbook> {
+        this.assertActive();
+        return service.summary(this.handleOf(workbook));
+    }
+
+    /** Applies one edit request and returns the committed revision and summary. */
+    async edit(workbook: Workbook | string, request: EditRequest): Promise<EditResult> {
+        this.assertActive();
+        assertEditRequest(request);
+        return service.edit(this.handleOf(workbook), request);
+    }
+
+    /** Writes one tracked workbook to an exchange format. */
+    async export(workbook: Workbook | string, options: ExportOptions): Promise<ExportReport> {
+        this.assertActive();
+        if (options === undefined || typeof options.target !== 'string' || options.target.length === 0) {
+            throw new OpenExcelError('session/argument-invalid', '`export` needs a non-empty `target` path');
+        }
+        return service.exportWorkbook(this.handleOf(workbook), options.format, options.target, options.overwrite ?? false);
+    }
+
+    /** Renders one sheet of a tracked workbook as SVG. */
+    async render(workbook: Workbook | string, options: WorkbookRenderOptions = {}): Promise<SvgRender> {
+        this.assertActive();
+        const format = options.format ?? 'svg';
+        if (format !== 'svg') {
+            throw new OpenExcelError('format/unsupported', `\`${format}\` rendering is not available in this build`, {
+                details: { feature: `render.${format}` },
+            });
+        }
+        return service.render(this.handleOf(workbook), options);
     }
 
     /** Releases the session and every workbook handle it still tracks. Idempotent. */
@@ -112,6 +164,21 @@ export class OpenExcel {
             }
         }
         this.handles.clear();
+        this.workbookHandles.clear();
+    }
+
+    private track(handle: number, workbook: Workbook): void {
+        this.handles.add(handle);
+        this.workbookHandles.set(workbook.id, handle);
+    }
+
+    private handleOf(workbook: Workbook | string): number {
+        const id = typeof workbook === 'string' ? workbook : workbook.id;
+        const handle = this.workbookHandles.get(id);
+        if (handle === undefined) {
+            throw new OpenExcelError('workbook/not-found', `workbook \`${id}\` is not open in this session`);
+        }
+        return handle;
     }
 
     /** @internal Throws once the session is gone. */
@@ -134,6 +201,23 @@ function assertProjectPath(input: WorkbookInput): string {
         });
     }
     return input.path;
+}
+
+function assertEditRequest(request: EditRequest): void {
+    if (request === undefined || !Array.isArray(request.operations) || request.operations.length === 0) {
+        throw new OpenExcelError('session/argument-invalid', '`edit` needs a non-empty `operations` array');
+    }
+    if (
+        request.expectedRevision !== undefined &&
+        (!Number.isInteger(request.expectedRevision) || request.expectedRevision < 0)
+    ) {
+        throw new OpenExcelError('session/argument-invalid', '`expectedRevision` must be a non-negative integer');
+    }
+    for (const operation of request.operations) {
+        if (typeof operation !== 'object' || operation === null || typeof operation.op !== 'string') {
+            throw new OpenExcelError('session/argument-invalid', 'each edit operation needs a string `op`');
+        }
+    }
 }
 
 function assertWorkbookInput(input: WorkbookInput): void {

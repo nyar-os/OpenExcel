@@ -14,7 +14,7 @@ import { createCli } from '@wae/commander';
 
 import * as service from './service.js';
 import { runGui } from './gui.js';
-import type { ExportFormat, InspectCheck, InspectReport, OpenExcelCapabilities, Workbook } from './types.js';
+import type { EditOperation, ExportFormat, InspectCheck, InspectReport, OpenExcelCapabilities, Workbook } from './types.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -37,7 +37,7 @@ const flag = (options: ParsedOptions, key: string): boolean => options[key] === 
 const input = (options: ParsedOptions): string | undefined => options._?.[0];
 
 /** Export targets the CLI accepts; each still reports its real support level. */
-const exportTargets: readonly ExportFormat[] = ['xlsx', 'xlsm', 'csv', 'json', 'pdf'];
+const exportTargets: readonly ExportFormat[] = ['xlsx', 'xlsm', 'csv', 'tsv', 'json', 'html', 'pdf'];
 
 function describeCapabilities(matrix: OpenExcelCapabilities): string {
     const formats = Object.entries(matrix.formats)
@@ -84,6 +84,23 @@ function parseChecks(value: string | undefined): InspectCheck[] | undefined {
         .filter((name) => name.length > 0) as InspectCheck[];
 }
 
+function parseValue(value: string): string | number | boolean | null {
+    const trimmed = value.trim();
+    if (trimmed === 'null') {
+        return null;
+    }
+    if (trimmed === 'true') {
+        return true;
+    }
+    if (trimmed === 'false') {
+        return false;
+    }
+    if (trimmed.length > 0 && /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) {
+        return Number(trimmed);
+    }
+    return value;
+}
+
 cli.command('capabilities', 'cli.cmd.capabilities').actionCtx(async (_options, _args, ctx) => {
     const matrix = service.capabilities();
     ctx.emitResult(matrix, describeCapabilities(matrix));
@@ -112,6 +129,90 @@ cli
             return 0;
         } finally {
             service.close(created.handle);
+        }
+    });
+
+cli.command('summary', 'cli.cmd.summary').actionCtx(async (options, _args, ctx) => {
+    const file = input(options);
+    if (file === undefined) {
+        ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+        return 2;
+    }
+    const opened = service.open(file);
+    try {
+        const workbook = service.summary(opened.handle);
+        ctx.emitResult(workbook, describeWorkbook(workbook));
+        return 0;
+    } finally {
+        service.close(opened.handle);
+    }
+});
+
+cli
+    .command('save', 'cli.cmd.save')
+    .option('--out <file>', 'cli.opt.out')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const out = text(options, 'out') ?? file;
+        const opened = service.open(file);
+        try {
+            const report = service.save(opened.handle, out, flag(options, 'overwrite'));
+            ctx.emitResult(report, `saved ${out} revision=${report.revision} sheets=${report.sheets}`);
+            return 0;
+        } finally {
+            service.close(opened.handle);
+        }
+    });
+
+cli
+    .command('edit', 'cli.cmd.edit')
+    .option('--sheet <name>', 'cli.opt.sheet')
+    .option('--cell <ref>', 'cli.opt.cell')
+    .option('--value <text>', 'cli.opt.value')
+    .option('--formula <formula>', 'cli.opt.formula')
+    .option('--out <file>', 'cli.opt.out')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const reference = text(options, 'cell');
+        if (reference === undefined) {
+            ctx.fail('open-excel.cli.cell-required', { message: '`--cell <A1>` is required' });
+            return 2;
+        }
+        const formula = text(options, 'formula');
+        const rawValue = text(options, 'value');
+        if (formula === undefined && rawValue === undefined) {
+            ctx.fail('open-excel.cli.value-required', { message: '`--value` or `--formula` is required' });
+            return 2;
+        }
+        const operation: EditOperation = {
+            op: 'cell.set',
+            sheet: text(options, 'sheet') ?? 'Sheet1',
+            reference,
+            ...(formula === undefined ? { value: parseValue(rawValue ?? '') } : { formula }),
+        };
+        const opened = service.open(file);
+        try {
+            const result = service.edit(opened.handle, { operations: [operation] });
+            const out = text(options, 'out');
+            if (out !== undefined) {
+                const saved = service.save(opened.handle, out, flag(options, 'overwrite'));
+                ctx.emitResult({ ...result, saved }, `edited ${reference} revision=${saved.revision} saved=${out}`);
+                return 0;
+            }
+            ctx.emitResult(result, `edited ${reference} revision=${result.revision}`);
+            return 0;
+        } finally {
+            service.close(opened.handle);
         }
     });
 
