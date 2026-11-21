@@ -444,10 +444,11 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<(), Servi
         "sheet.rename" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let name = required_name(operation)?;
-            if project.sheets.iter().any(|sheet| sheet.id != key && sheet.name.eq_ignore_ascii_case(&name)) {
+            let index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;
+            if project.sheets.iter().enumerate().any(|(other, sheet)| other != index && sheet.name.eq_ignore_ascii_case(&name))
+            {
                 return Err(ServiceError::argument(format!("sheet `{name}` already exists")));
             }
-            let index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;
             project.sheets[index].name = name;
         }
         "sheet.remove" => {
