@@ -16,8 +16,8 @@ import type {
     EditResult,
     ExportOptions,
     ExportReport,
-    FindHit,
     FindRequest,
+    FindResult,
     InspectOptions,
     InspectReport,
     OpenExcelCapabilities,
@@ -159,7 +159,7 @@ export class OpenExcel {
     }
 
     /** Searches evaluated values and formula sources of a tracked workbook. */
-    async find(workbook: Workbook | string, request: FindRequest): Promise<readonly FindHit[]> {
+    async find(workbook: Workbook | string, request: FindRequest): Promise<FindResult> {
         this.assertActive();
         if (request === undefined || typeof request.query !== 'string' || request.query.length === 0) {
             throw new OpenExcelError('session/argument-invalid', '`find` needs a non-empty `query`');

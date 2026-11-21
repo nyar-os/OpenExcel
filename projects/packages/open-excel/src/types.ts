@@ -76,6 +76,8 @@ export interface OpenExcelCapabilities {
     readonly formulas: FormulaCapability;
     readonly renderers: Readonly<Record<RenderFormat, SupportLevel>>;
     readonly exportTargets: Readonly<Record<ExportFormat, SupportLevel>>;
+    /** What each `partial` export target approximates or drops. */
+    readonly exportLimits?: Readonly<Partial<Record<ExportFormat, readonly string[]>>>;
 }
 
 /** Formula disclosure of the installed engine. */
@@ -377,6 +379,23 @@ export type EditOperation =
     | { readonly op: 'sheet.remove'; readonly sheet: string }
     | { readonly op: 'sheet.duplicate'; readonly sheet: string; readonly name?: string }
     | { readonly op: 'sheet.move'; readonly sheet: string; readonly index: number }
+    | {
+          /**
+           * Sorts whole rows of `range` by `column`, moving formulas with their
+           * row. `column` is a one-based offset inside the range or an absolute
+           * column letter. Numbers sort before text, text before booleans, and
+           * blanks always trail. The operation is rejected when the range
+           * overlaps a merged range.
+           */
+          readonly op: 'range.sort';
+          readonly sheet: string;
+          readonly range: string;
+          readonly column: number | string;
+          /** Ascending when true, which is the default. */
+          readonly ascending?: boolean;
+          /** Keeps the first row of `range` in place. */
+          readonly hasHeader?: boolean;
+      }
     | { readonly op: 'range.clear'; readonly sheet: string; readonly range: string };
 
 /** Request of `Workbook.edit()`. */
@@ -423,4 +442,11 @@ export interface FindHit {
     readonly start: number;
     readonly end: number;
     readonly text: string;
+}
+
+/** Result of `Workbook.find()`. */
+export interface FindResult {
+    readonly hits: readonly FindHit[];
+    /** True when the engine stopped at its 500-hit cap with more matches left. */
+    readonly truncated: boolean;
 }
