@@ -37,9 +37,13 @@ pub(crate) const FUNCTIONS: &[&str] = &[
     "ABS",
     "AND",
     "AVERAGE",
+    "AVERAGEIF",
+    "AVERAGEIFS",
     "CONCAT",
     "COUNT",
     "COUNTA",
+    "COUNTIF",
+    "COUNTIFS",
     "IF",
     "IFERROR",
     "INDEX",
@@ -49,8 +53,10 @@ pub(crate) const FUNCTIONS: &[&str] = &[
     "LOWER",
     "MATCH",
     "MAX",
+    "MAXIFS",
     "MID",
     "MIN",
+    "MINIFS",
     "NOT",
     "OR",
     "RIGHT",
@@ -59,10 +65,13 @@ pub(crate) const FUNCTIONS: &[&str] = &[
     "ROUNDUP",
     "SUBSTITUTE",
     "SUM",
+    "SUMIF",
+    "SUMIFS",
     "TEXTJOIN",
     "TRIM",
     "UPPER",
     "VLOOKUP",
+    "XLOOKUP",
 ];
 
 const MAX_ROW: u32 = 1_048_576;
@@ -938,6 +947,9 @@ impl Evaluator<'_> {
             "IF" => return self.function_if(args, current),
             "IFERROR" => return self.function_iferror(args, current),
             "AND" | "OR" => return self.function_logical(name == "AND", args, current),
+            // XLOOKUP evaluates its `if_not_found` argument only when the
+            // lookup fails, so a fallback that would raise never runs on a hit.
+            "XLOOKUP" => return self.function_xlookup(args, current),
             _ => {}
         }
         let mut arguments = Vec::with_capacity(args.len());
@@ -1022,6 +1034,163 @@ impl Evaluator<'_> {
             }
         }
         CellValue::boolean(and)
+    }
+
+    /// `XLOOKUP(lookup, lookup_array, return_array, [if_not_found], [match_mode], [search_mode])`.
+    ///
+    /// Supports exact (`0`), exact-or-next-smaller (`-1`), exact-or-next-larger
+    /// (`1`) and wildcard (`2`) matching. Binary search modes fall back to a
+    /// linear walk, which yields the same matches.
+    fn function_xlookup(&mut self, args: &[Expr], current: usize) -> CellValue {
+        if !(3..=6).contains(&args.len()) {
+            return error(VALUE);
+        }
+        let lookup = self.eval(&args[0], current);
+        if let CellValue::Error { .. } = lookup {
+            return lookup;
+        }
+        let lookup_grid = match &args[1] {
+            Expr::Range { sheet, range } => match self.grid(sheet.as_deref(), range, current) {
+                Ok(grid) => grid,
+                Err(error) => return error,
+            },
+            _ => return error(VALUE),
+        };
+        let return_grid = match &args[2] {
+            Expr::Range { sheet, range } => match self.grid(sheet.as_deref(), range, current) {
+                Ok(grid) => grid,
+                Err(error) => return error,
+            },
+            _ => return error(VALUE),
+        };
+        let match_mode = match self.optional_integer(args.get(4), current) {
+            Ok(mode) => mode.unwrap_or(0),
+            Err(error) => return error,
+        };
+        if !matches!(match_mode, -1 | 0 | 1 | 2) {
+            return error(VALUE);
+        }
+        let search_mode = match self.optional_integer(args.get(5), current) {
+            Ok(mode) => mode.unwrap_or(1),
+            Err(error) => return error,
+        };
+        if !matches!(search_mode, 1 | -1 | 2 | -2) {
+            return error(VALUE);
+        }
+        let vertical = if lookup_grid.columns == 1 {
+            true
+        }
+        else if lookup_grid.rows == 1 {
+            false
+        }
+        else {
+            return error(VALUE);
+        };
+        let length = if vertical { lookup_grid.rows } else { lookup_grid.columns };
+        let key_at = |index: u32| -> CellValue {
+            if vertical {
+                lookup_grid.value(index, 1).cloned().unwrap_or(CellValue::Empty)
+            }
+            else {
+                lookup_grid.value(1, index).cloned().unwrap_or(CellValue::Empty)
+            }
+        };
+
+        let reverse = search_mode == -1;
+        let mut found: Option<u32> = None;
+        if match_mode == 2 {
+            let pattern = match as_text(&lookup) {
+                Ok(text) => text,
+                Err(error) => return error,
+            };
+            for index in 1..=length {
+                let position = if reverse { length - index + 1 } else { index };
+                if let CellValue::Text { text } = key_at(position)
+                    && wildcard_match(&pattern, &text)
+                {
+                    found = Some(position);
+                    break;
+                }
+            }
+        }
+        else if match_mode == 0 {
+            for index in 1..=length {
+                let position = if reverse { length - index + 1 } else { index };
+                match compare(&key_at(position), &lookup) {
+                    Ok(Ordering::Equal) => {
+                        found = Some(position);
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(error) => return error,
+                }
+            }
+        }
+        else {
+            let mut best = None;
+            for index in 1..=length {
+                let key = key_at(index);
+                let ordering = match compare(&key, &lookup) {
+                    Ok(ordering) => ordering,
+                    Err(error) => return error,
+                };
+                let eligible = if match_mode == -1 { ordering != Ordering::Greater } else { ordering != Ordering::Less };
+                if !eligible {
+                    continue;
+                }
+                let better = match best {
+                    None => true,
+                    Some(existing) => match compare(&key, &key_at(existing)) {
+                        Ok(ordering) => {
+                            if match_mode == -1 {
+                                ordering == Ordering::Greater
+                            }
+                            else {
+                                ordering == Ordering::Less
+                            }
+                        }
+                        Err(error) => return error,
+                    },
+                };
+                if better {
+                    best = Some(index);
+                }
+            }
+            found = best;
+        }
+
+        let Some(position) = found
+        else {
+            if let Some(fallback) = args.get(3)
+                && !matches!(fallback, Expr::Empty)
+            {
+                return self.eval(fallback, current);
+            }
+            return error(NA);
+        };
+        if vertical {
+            if position > return_grid.rows {
+                return error(REF);
+            }
+            return_grid.value(position, 1).cloned().unwrap_or(CellValue::Empty)
+        }
+        else {
+            if position > return_grid.columns {
+                return error(REF);
+            }
+            return_grid.value(1, position).cloned().unwrap_or(CellValue::Empty)
+        }
+    }
+
+    /// Reads an optional numeric argument, treating a gap as absent.
+    fn optional_integer(&mut self, argument: Option<&Expr>, current: usize) -> Result<Option<i64>, CellValue> {
+        match argument {
+            None | Some(Expr::Empty) => Ok(None),
+            Some(expression) => {
+                let value = self.eval(expression, current);
+                numeric(&value).map(|number| Some(number.trunc() as i64))
+            }
+        }
     }
 }
 
@@ -1339,6 +1508,447 @@ fn function_match(args: &[Argument]) -> CellValue {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Conditional aggregation
+// ---------------------------------------------------------------------------
+
+/// Comparison an `IF`-suffixed criterion applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComparisonOp {
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+}
+
+/// One parsed `COUNTIF`-style criterion.
+struct Criterion {
+    op: ComparisonOp,
+    operand: CellValue,
+}
+
+/// Reads a criterion argument: a literal, `">10"`, `"<>x"` or `"*x*"`.
+fn criterion_from(value: &CellValue) -> Result<Option<Criterion>, CellValue> {
+    match value {
+        CellValue::Error { .. } => Err(value.clone()),
+        CellValue::Number { .. } | CellValue::Bool { .. } => {
+            Ok(Some(Criterion { op: ComparisonOp::Equal, operand: value.clone() }))
+        }
+        CellValue::Empty => Ok(None),
+        CellValue::Text { text } => {
+            for (prefix, op) in [
+                (">=", ComparisonOp::GreaterEqual),
+                ("<=", ComparisonOp::LessEqual),
+                ("<>", ComparisonOp::NotEqual),
+                (">", ComparisonOp::Greater),
+                ("<", ComparisonOp::Less),
+                ("=", ComparisonOp::Equal),
+            ] {
+                if let Some(rest) = text.strip_prefix(prefix) {
+                    return Ok(Some(Criterion { op, operand: criterion_operand(rest) }));
+                }
+            }
+            Ok(Some(Criterion { op: ComparisonOp::Equal, operand: criterion_operand(text) }))
+        }
+    }
+}
+
+/// Converts the operand of a criterion, keeping wildcard text as text.
+fn criterion_operand(text: &str) -> CellValue {
+    let trimmed = text.trim();
+    if let Ok(number) = trimmed.parse::<f64>() {
+        return CellValue::number(number);
+    }
+    if trimmed.eq_ignore_ascii_case("TRUE") {
+        return CellValue::boolean(true);
+    }
+    if trimmed.eq_ignore_ascii_case("FALSE") {
+        return CellValue::boolean(false);
+    }
+    CellValue::text(text)
+}
+
+/// Matches one value against a criterion; errors propagate to the caller.
+fn criterion_matches(criterion: &Criterion, value: &CellValue) -> bool {
+    if value.is_empty() {
+        let blank_operand = match &criterion.operand {
+            CellValue::Empty => true,
+            CellValue::Text { text } => text.is_empty(),
+            _ => false,
+        };
+        return criterion.op == ComparisonOp::Equal && blank_operand;
+    }
+    match criterion.op {
+        ComparisonOp::Equal => criterion_equal(&criterion.operand, value),
+        ComparisonOp::NotEqual => !criterion_equal(&criterion.operand, value),
+        _ => compare(value, &criterion.operand)
+            .map(|ordering| match criterion.op {
+                ComparisonOp::Less => ordering == Ordering::Less,
+                ComparisonOp::LessEqual => ordering != Ordering::Greater,
+                ComparisonOp::Greater => ordering == Ordering::Greater,
+                _ => ordering != Ordering::Less,
+            })
+            .unwrap_or(false),
+    }
+}
+
+/// Matches one value against an optional criterion; `None` means "blank".
+fn criterion_matches_optional(criterion: &Option<Criterion>, value: &CellValue) -> bool {
+    match criterion {
+        Some(criterion) => criterion_matches(criterion, value),
+        None => value.is_empty(),
+    }
+}
+
+fn criterion_equal(operand: &CellValue, value: &CellValue) -> bool {
+    match (operand, value) {
+        (CellValue::Text { text: pattern }, CellValue::Text { text }) => {
+            if pattern.contains(['*', '?']) {
+                wildcard_match(pattern, text)
+            }
+            else {
+                pattern.eq_ignore_ascii_case(text)
+            }
+        }
+        (CellValue::Text { .. }, _) => false,
+        (CellValue::Number { number: left }, CellValue::Number { number: right }) => left == right,
+        (CellValue::Number { .. }, _) => false,
+        (CellValue::Bool { value: left }, CellValue::Bool { value: right }) => left == right,
+        (CellValue::Bool { .. }, _) => false,
+        (CellValue::Empty, other) => other.is_empty(),
+        _ => false,
+    }
+}
+
+/// Case-insensitive `*` (any run) and `?` (one character) pattern match.
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().flat_map(char::to_lowercase).collect();
+    let text: Vec<char> = text.chars().flat_map(char::to_lowercase).collect();
+    let (mut p, mut t) = (0usize, 0usize);
+    let mut star = None;
+    let mut mark = 0usize;
+    while t < text.len() {
+        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == text[t]) {
+            p += 1;
+            t += 1;
+        }
+        else if p < pattern.len() && pattern[p] == '*' {
+            star = Some(p);
+            p += 1;
+            mark = t;
+        }
+        else if let Some(position) = star {
+            p = position + 1;
+            mark += 1;
+            t = mark;
+        }
+        else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == '*' {
+        p += 1;
+    }
+    p == pattern.len()
+}
+
+/// Reads `(range, criterion)` pairs from `start`, rejecting odd tails.
+fn criteria_pairs<'a>(args: &'a [Argument], start: usize) -> Result<Vec<(&'a Grid, Option<Criterion>)>, CellValue> {
+    let mut pairs = Vec::new();
+    let mut index = start;
+    while index < args.len() {
+        if index + 1 >= args.len() {
+            return Err(error(VALUE));
+        }
+        let grid = match &args[index] {
+            Argument::Grid(grid) => grid,
+            _ => return Err(error(VALUE)),
+        };
+        let raw = scalar(args, index + 1).ok_or_else(|| error(VALUE))?;
+        let criterion = criterion_from(&raw)?;
+        pairs.push((grid, criterion));
+        index += 2;
+    }
+    if pairs.is_empty() { Err(error(VALUE)) } else { Ok(pairs) }
+}
+
+fn same_shape(left: &Grid, right: &Grid) -> bool {
+    left.rows == right.rows && left.columns == right.columns
+}
+
+/// Whether every criterion pair matches the cell at `index`.
+fn criteria_match_at(pairs: &[(&Grid, Option<Criterion>)], index: usize) -> Result<bool, CellValue> {
+    for (grid, criterion) in pairs {
+        let Some(value) = grid.values.get(index)
+        else {
+            return Err(error(VALUE));
+        };
+        if let CellValue::Error { .. } = value {
+            return Err(value.clone());
+        }
+        if !criterion_matches_optional(criterion, value) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn function_sumif(args: &[Argument]) -> CellValue {
+    if !(2..=3).contains(&args.len()) {
+        return error(VALUE);
+    }
+    let Some(criteria_grid) = grid_argument(args, 0)
+    else {
+        return error(VALUE);
+    };
+    let Some(raw) = scalar(args, 1)
+    else {
+        return error(VALUE);
+    };
+    let criterion = match criterion_from(&raw) {
+        Ok(criterion) => criterion,
+        Err(error) => return error,
+    };
+    let sum_grid = if args.len() == 3 {
+        match grid_argument(args, 2) {
+            Some(grid) => grid,
+            None => return error(VALUE),
+        }
+    }
+    else {
+        criteria_grid
+    };
+    let mut total = 0.0;
+    for (index, value) in criteria_grid.values.iter().enumerate() {
+        if let CellValue::Error { .. } = value {
+            return value.clone();
+        }
+        if !criterion_matches_optional(&criterion, value) {
+            continue;
+        }
+        match sum_grid.values.get(index) {
+            Some(CellValue::Number { number }) => total += number,
+            Some(value @ CellValue::Error { .. }) => return value.clone(),
+            _ => {}
+        }
+    }
+    CellValue::number(normalize_zero(total))
+}
+
+fn function_countif(args: &[Argument]) -> CellValue {
+    if args.len() != 2 {
+        return error(VALUE);
+    }
+    let Some(criteria_grid) = grid_argument(args, 0)
+    else {
+        return error(VALUE);
+    };
+    let Some(raw) = scalar(args, 1)
+    else {
+        return error(VALUE);
+    };
+    let criterion = match criterion_from(&raw) {
+        Ok(criterion) => criterion,
+        Err(error) => return error,
+    };
+    let mut count = 0usize;
+    for value in &criteria_grid.values {
+        if let CellValue::Error { .. } = value {
+            return value.clone();
+        }
+        if criterion_matches_optional(&criterion, value) {
+            count += 1;
+        }
+    }
+    CellValue::number(count as f64)
+}
+
+fn function_averageif(args: &[Argument]) -> CellValue {
+    if !(2..=3).contains(&args.len()) {
+        return error(VALUE);
+    }
+    let Some(criteria_grid) = grid_argument(args, 0)
+    else {
+        return error(VALUE);
+    };
+    let Some(raw) = scalar(args, 1)
+    else {
+        return error(VALUE);
+    };
+    let criterion = match criterion_from(&raw) {
+        Ok(criterion) => criterion,
+        Err(error) => return error,
+    };
+    let average_grid = if args.len() == 3 {
+        match grid_argument(args, 2) {
+            Some(grid) => grid,
+            None => return error(VALUE),
+        }
+    }
+    else {
+        criteria_grid
+    };
+    let mut total = 0.0;
+    let mut count = 0usize;
+    for (index, value) in criteria_grid.values.iter().enumerate() {
+        if let CellValue::Error { .. } = value {
+            return value.clone();
+        }
+        if !criterion_matches_optional(&criterion, value) {
+            continue;
+        }
+        match average_grid.values.get(index) {
+            Some(CellValue::Number { number }) => {
+                total += number;
+                count += 1;
+            }
+            Some(value @ CellValue::Error { .. }) => return value.clone(),
+            _ => {}
+        }
+    }
+    if count == 0 {
+        return error(DIV0);
+    }
+    CellValue::number(normalize_zero(total / count as f64))
+}
+
+fn function_sumifs(args: &[Argument]) -> CellValue {
+    if args.len() < 3 || (args.len() - 1) % 2 != 0 {
+        return error(VALUE);
+    }
+    let Some(sum_grid) = grid_argument(args, 0)
+    else {
+        return error(VALUE);
+    };
+    let pairs = match criteria_pairs(args, 1) {
+        Ok(pairs) => pairs,
+        Err(error) => return error,
+    };
+    if pairs.iter().any(|(grid, _)| !same_shape(grid, sum_grid)) {
+        return error(VALUE);
+    }
+    let mut total = 0.0;
+    for (index, value) in sum_grid.values.iter().enumerate() {
+        match criteria_match_at(&pairs, index) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => return error,
+        }
+        match value {
+            CellValue::Number { number } => total += number,
+            CellValue::Error { .. } => return value.clone(),
+            _ => {}
+        }
+    }
+    CellValue::number(normalize_zero(total))
+}
+
+fn function_countifs(args: &[Argument]) -> CellValue {
+    if args.len() < 2 {
+        return error(VALUE);
+    }
+    let pairs = match criteria_pairs(args, 0) {
+        Ok(pairs) => pairs,
+        Err(error) => return error,
+    };
+    let first = pairs[0].0;
+    if pairs.iter().any(|(grid, _)| !same_shape(grid, first)) {
+        return error(VALUE);
+    }
+    let mut count = 0usize;
+    for index in 0..first.values.len() {
+        match criteria_match_at(&pairs, index) {
+            Ok(true) => count += 1,
+            Ok(false) => {}
+            Err(error) => return error,
+        }
+    }
+    CellValue::number(count as f64)
+}
+
+fn function_averageifs(args: &[Argument]) -> CellValue {
+    if args.len() < 3 || (args.len() - 1) % 2 != 0 {
+        return error(VALUE);
+    }
+    let Some(average_grid) = grid_argument(args, 0)
+    else {
+        return error(VALUE);
+    };
+    let pairs = match criteria_pairs(args, 1) {
+        Ok(pairs) => pairs,
+        Err(error) => return error,
+    };
+    if pairs.iter().any(|(grid, _)| !same_shape(grid, average_grid)) {
+        return error(VALUE);
+    }
+    let mut total = 0.0;
+    let mut count = 0usize;
+    for (index, value) in average_grid.values.iter().enumerate() {
+        match criteria_match_at(&pairs, index) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => return error,
+        }
+        match value {
+            CellValue::Number { number } => {
+                total += number;
+                count += 1;
+            }
+            CellValue::Error { .. } => return value.clone(),
+            _ => {}
+        }
+    }
+    if count == 0 {
+        return error(DIV0);
+    }
+    CellValue::number(normalize_zero(total / count as f64))
+}
+
+fn function_maxifs(args: &[Argument], maximum: bool) -> CellValue {
+    if args.len() < 3 || (args.len() - 1) % 2 != 0 {
+        return error(VALUE);
+    }
+    let Some(value_grid) = grid_argument(args, 0)
+    else {
+        return error(VALUE);
+    };
+    let pairs = match criteria_pairs(args, 1) {
+        Ok(pairs) => pairs,
+        Err(error) => return error,
+    };
+    if pairs.iter().any(|(grid, _)| !same_shape(grid, value_grid)) {
+        return error(VALUE);
+    }
+    let mut best: Option<f64> = None;
+    for (index, value) in value_grid.values.iter().enumerate() {
+        match criteria_match_at(&pairs, index) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => return error,
+        }
+        match value {
+            CellValue::Number { number } => {
+                best = Some(match best {
+                    None => *number,
+                    Some(current) => {
+                        if maximum {
+                            current.max(*number)
+                        }
+                        else {
+                            current.min(*number)
+                        }
+                    }
+                });
+            }
+            CellValue::Error { .. } => return value.clone(),
+            _ => {}
+        }
+    }
+    CellValue::number(normalize_zero(best.unwrap_or(0.0)))
+}
+
 fn function_textjoin(args: &[Argument]) -> CellValue {
     if args.len() < 3 {
         return error(VALUE);
@@ -1509,6 +2119,14 @@ fn apply_function(name: &str, args: &[Argument]) -> CellValue {
         },
         "COUNT" => CellValue::number(count_numbers(args) as f64),
         "COUNTA" => CellValue::number(count_non_empty(args) as f64),
+        "SUMIF" => function_sumif(args),
+        "COUNTIF" => function_countif(args),
+        "AVERAGEIF" => function_averageif(args),
+        "SUMIFS" => function_sumifs(args),
+        "COUNTIFS" => function_countifs(args),
+        "AVERAGEIFS" => function_averageifs(args),
+        "MAXIFS" => function_maxifs(args, true),
+        "MINIFS" => function_maxifs(args, false),
         "IF" => error(VALUE),
         "ROUND" => {
             if args.len() != 2 {
@@ -1906,6 +2524,57 @@ mod tests {
         assert_eq!(evaluate(&mut project, "=Data!A2*2"), CellValue::number(40.0));
         project.sheets[1].name = "My Data".to_owned();
         assert_eq!(evaluate(&mut project, "=SUM('My Data'!A1:A2)"), CellValue::number(30.0));
+    }
+
+    #[test]
+    fn conditional_aggregates_cover_text_numbers_and_wildcards() {
+        let mut project = project_with(&[
+            ("A1", CellValue::text("alpha")),
+            ("B1", CellValue::number(10.0)),
+            ("A2", CellValue::text("beta")),
+            ("B2", CellValue::number(20.0)),
+            ("A3", CellValue::text("Alpha Two")),
+            ("B3", CellValue::number(30.0)),
+        ]);
+        assert_eq!(evaluate(&mut project, "=SUMIF(A1:A4,\"alpha\",B1:B4)"), CellValue::number(10.0));
+        assert_eq!(evaluate(&mut project, "=SUMIF(A1:A4,\"*a*\",B1:B4)"), CellValue::number(60.0));
+        assert_eq!(evaluate(&mut project, "=SUMIF(B1:B4,\">15\")"), CellValue::number(50.0));
+        assert_eq!(evaluate(&mut project, "=COUNTIF(B1:B4,\">15\")"), CellValue::number(2.0));
+        assert_eq!(evaluate(&mut project, "=COUNTIF(A1:A4,\"<>beta\")"), CellValue::number(2.0));
+        assert_eq!(evaluate(&mut project, "=COUNTIF(B1:B4,\"\")"), CellValue::number(1.0));
+        assert_eq!(evaluate(&mut project, "=SUMIFS(B1:B4,A1:A4,\"*a*\",B1:B4,\">15\")"), CellValue::number(50.0));
+        assert_eq!(evaluate(&mut project, "=COUNTIFS(A1:A4,\"*a*\",B1:B4,\">15\")"), CellValue::number(2.0));
+        assert_eq!(evaluate(&mut project, "=AVERAGEIF(A1:A4,\"alpha\",B1:B4)"), CellValue::number(10.0));
+        assert_eq!(evaluate(&mut project, "=AVERAGEIFS(B1:B4,A1:A4,\"*a*\")"), CellValue::number(20.0));
+        assert_eq!(evaluate(&mut project, "=MAXIFS(B1:B4,A1:A4,\"*a*\")"), CellValue::number(30.0));
+        assert_eq!(evaluate(&mut project, "=MINIFS(B1:B4,A1:A4,\"*a*\")"), CellValue::number(10.0));
+    }
+
+    #[test]
+    fn conditional_aggregates_propagate_errors_and_check_shapes() {
+        let mut project = project_with(&[("A1", CellValue::error("#DIV/0!")), ("B1", CellValue::number(1.0))]);
+        assert_eq!(evaluate(&mut project, "=COUNTIF(A1:A1,\">0\")"), error("#DIV/0!"));
+        assert_eq!(evaluate(&mut project, "=SUMIFS(B1:B1,A1:A1,\">0\")"), error("#DIV/0!"));
+        assert_eq!(evaluate(&mut project, "=SUMIFS(B1:B2,A1:A1,\">0\")"), error(VALUE));
+    }
+
+    #[test]
+    fn xlookup_supports_exact_approximate_wildcards_and_fallbacks() {
+        let mut project = lookup_project();
+        for (column, key, label) in [(5, 10.0, "low"), (6, 20.0, "mid"), (7, 30.0, "high")] {
+            project.sheets[0].write_cell(1, column, CellValue::number(key), None, None);
+            project.sheets[0].write_cell(2, column, CellValue::text(label), None, None);
+        }
+        assert_eq!(evaluate(&mut project, "=XLOOKUP(2,A1:A3,B1:B3)"), CellValue::text("two"));
+        assert_eq!(evaluate(&mut project, "=XLOOKUP(2.5,A1:A3,C1:C3,\"none\",-1)"), CellValue::number(20.0));
+        assert_eq!(evaluate(&mut project, "=XLOOKUP(2.5,A1:A3,C1:C3,\"none\",1)"), CellValue::number(30.0));
+        assert_eq!(evaluate(&mut project, "=XLOOKUP(9,A1:A3,B1:B3,\"missing\")"), CellValue::text("missing"));
+        assert_eq!(evaluate(&mut project, "=XLOOKUP(9,A1:A3,B1:B3)"), error(NA));
+        assert_eq!(evaluate(&mut project, "=XLOOKUP(\"tw*\",B1:B3,C1:C3,\"none\",2)"), CellValue::number(20.0));
+        assert_eq!(evaluate(&mut project, "=XLOOKUP(20,E1:G1,E2:G2)"), CellValue::text("mid"));
+        // The fallback stays lazy: a hit never evaluates it.
+        assert_eq!(evaluate(&mut project, "=XLOOKUP(2,A1:A3,B1:B3,1/0)"), CellValue::text("two"));
+        assert_eq!(evaluate(&mut project, "=XLOOKUP(9,A1:A3,B1:B3,1/0)"), error(DIV0));
     }
 
     #[test]
