@@ -15,8 +15,8 @@ import type {
     EditResult,
     ExportFormat,
     ExportReport,
-    FindHit,
     FindRequest,
+    FindResult,
     InspectCheck,
     InspectReport,
     OpenExcelCapabilities,
@@ -132,8 +132,8 @@ export function recalc(handle: number): RecalcReport {
 }
 
 /** Searches evaluated values and formula sources of one open workbook. */
-export function find(handle: number, request: FindRequest): FindHit[] {
-    return decode<FindHit[]>(() => binding('workbook.find').workbook_find(handle, JSON.stringify(request)));
+export function find(handle: number, request: FindRequest): FindResult {
+    return decode<FindResult>(() => binding('workbook.find').workbook_find(handle, JSON.stringify(request)));
 }
 
 /** Renders one sheet of an open workbook as SVG. */

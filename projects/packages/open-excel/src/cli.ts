@@ -18,7 +18,7 @@ import type {
     CellDetail,
     EditOperation,
     ExportFormat,
-    FindHit,
+    FindResult,
     InspectCheck,
     InspectReport,
     OpenExcelCapabilities,
@@ -58,8 +58,8 @@ function describeCapabilities(matrix: OpenExcelCapabilities): string {
         .filter(([, level]) => level === 'supported')
         .map(([name]) => name);
     const targets = Object.entries(matrix.exportTargets)
-        .filter(([, level]) => level === 'supported')
-        .map(([name]) => name);
+        .filter(([, level]) => level === 'supported' || level === 'partial')
+        .map(([name, level]) => (level === 'partial' ? `${name} (partial)` : name));
     return [
         `engine: ${matrix.engine.package} ${matrix.engine.version}`,
         `project: ${matrix.project}`,
@@ -109,9 +109,9 @@ function describeRecalc(report: RecalcReport): string {
     return `recalc revision=${report.revision} changed=${report.changed}`;
 }
 
-function describeFind(hits: readonly FindHit[]): string {
-    const lines = [`find hits=${hits.length}`];
-    for (const hit of hits) {
+function describeFind(result: FindResult): string {
+    const lines = [`find hits=${result.hits.length} truncated=${result.truncated}`];
+    for (const hit of result.hits) {
         lines.push(`  ${hit.sheet}!${hit.address} ${hit.field} ${hit.start}-${hit.end} ${hit.text}`);
     }
     return lines.join('\n');
@@ -374,8 +374,8 @@ cli
         const sheet = text(options, 'sheet');
         const opened = service.open(file);
         try {
-            const hits = service.find(opened.handle, sheet === undefined ? { query } : { query, sheet });
-            ctx.emitResult(hits, describeFind(hits));
+            const result = service.find(opened.handle, sheet === undefined ? { query } : { query, sheet });
+            ctx.emitResult(result, describeFind(result));
             return 0;
         } finally {
             service.close(opened.handle);
