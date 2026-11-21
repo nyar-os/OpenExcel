@@ -1,75 +1,41 @@
-//! A1 reference parsing and formatting shared by the model, the inspector and the writers.
+//! A1 notation as the workbook model needs it.
+//!
+//! The notation itself lives in `document_formats::a1` so the reader, the writers
+//! and every product agree on one parser. What stays here is the workbook's own
+//! bound: an XLSX sheet ends at column XFD, so a reference that would name column
+//! XFE is rejected here even though the notation alone can spell it.
+
+use document_formats::a1;
 
 use crate::model::CellRange;
 
+/// Last column of an XLSX sheet, `XFD`.
+const MAX_COLUMN: u32 = 16_384;
+
 /// Converts an A1 column name such as `AB` into a one-based column index.
 pub fn column_number(letters: &str) -> Option<u32> {
-    if letters.is_empty() || letters.len() > 3 {
-        return None;
-    }
-    let mut value = 0u32;
-    for character in letters.chars() {
-        let upper = character.to_ascii_uppercase();
-        if !upper.is_ascii_uppercase() {
-            return None;
-        }
-        value = value.checked_mul(26)?.checked_add(u32::from(upper as u8 - b'A' + 1))?;
-    }
-    Some(value)
+    a1::column_number(letters).filter(|column| *column <= MAX_COLUMN)
 }
 
 /// Converts a one-based column index into its A1 letters.
-pub fn column_name(mut column: u32) -> String {
-    let mut letters = Vec::new();
-    while column > 0 {
-        let remainder = ((column - 1) % 26) as u8;
-        letters.push((b'A' + remainder) as char);
-        column = (column - 1) / 26;
-    }
-    letters.reverse();
-    letters.into_iter().collect()
+pub fn column_name(column: u32) -> String {
+    a1::column_name(column)
 }
 
 /// Formats one one-based row and column as an A1 reference.
 pub fn format_reference(row: u32, column: u32) -> String {
-    format!("{}{}", column_name(column), row)
+    a1::format_reference(row, column)
 }
 
 /// Parses a single A1 cell reference such as `$B$4` into a one-based row and column.
 pub fn parse_reference(text: &str) -> Option<(u32, u32)> {
-    let mut letters = String::new();
-    let mut digits = String::new();
-    for character in text.trim().chars() {
-        if character == '$' {
-            continue;
-        }
-        if character.is_ascii_alphabetic() && digits.is_empty() {
-            letters.push(character);
-        }
-        else if character.is_ascii_digit() {
-            digits.push(character);
-        }
-        else {
-            return None;
-        }
-    }
-    let column = column_number(&letters)?;
-    let row: u32 = digits.parse().ok()?;
-    (row > 0 && column > 0).then_some((row, column))
+    a1::parse_reference(text).filter(|(_, column)| *column <= MAX_COLUMN)
 }
 
-/// Parses `A1`, `A1:B2` or `A1:B2:C3` text into an inclusive rectangle.
+/// Parses `A1` or `A1:B2` text into an inclusive rectangle.
 pub fn parse_range(text: &str) -> Option<CellRange> {
-    let mut parts = text.split(':');
-    let first = parse_reference(parts.next()?)?;
-    let second = match parts.next() {
-        Some(part) => parse_reference(part)?,
-        None => first,
-    };
-    if parts.next().is_some() {
-        return None;
-    }
-    Some(CellRange::between(first.0, first.1, second.0, second.1))
+    let ((start_row, start_column), (end_row, end_column)) = a1::parse_range(text)?;
+    (start_column <= MAX_COLUMN && end_column <= MAX_COLUMN).then(|| CellRange::between(start_row, start_column, end_row, end_column))
 }
 
 #[cfg(test)]
@@ -95,10 +61,18 @@ mod tests {
     }
 
     #[test]
+    fn rejects_columns_past_the_sheet_edge() {
+        assert_eq!(column_number("XFE"), None);
+        assert_eq!(parse_reference("XFE1"), None);
+        assert_eq!(parse_range("A1:XFE9"), None);
+    }
+
+    #[test]
     fn parses_ranges() {
         let range = parse_range("B2:D5").expect("range");
         assert_eq!((range.start_row, range.end_row, range.start_column, range.end_column), (2, 5, 2, 4));
         let single = parse_range("C3").expect("single");
         assert_eq!((single.start_row, single.end_row, single.start_column, single.end_column), (3, 3, 3, 3));
+        assert_eq!(parse_range("A1:B2:C3"), None);
     }
 }

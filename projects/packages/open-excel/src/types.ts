@@ -364,6 +364,24 @@ export type EditOperation =
           readonly row: number;
           readonly column: number;
       }
+    | {
+          /** Sets one column width in Excel character units; `hidden` hides the column. */
+          readonly op: 'column.setWidth';
+          readonly sheet: string;
+          /** One-based column number or a column letter such as `B`. */
+          readonly column: number | string;
+          readonly width: number;
+          readonly hidden?: boolean;
+      }
+    | {
+          /** Sets one row height in points; `hidden` hides the row. */
+          readonly op: 'row.setHeight';
+          readonly sheet: string;
+          /** One-based row number. */
+          readonly row: number;
+          readonly height: number;
+          readonly hidden?: boolean;
+      }
     | { readonly op: 'sheet.setVisibility'; readonly sheet: string; readonly visibility: SheetVisibility }
     | {
           /** Replaces text inside `range` and reports the replacement count. */
