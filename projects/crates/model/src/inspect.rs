@@ -362,6 +362,18 @@ fn check_types(project: &Project, issues: &mut Vec<Issue>) {
                     true,
                 ));
             }
+            if let Some(CellValue::Error { code }) = &cell.cached
+                && !matches!(cell.value, CellValue::Error { .. })
+            {
+                issues.push(Issue::new(
+                    "inspect.types.error-value",
+                    "error",
+                    sheet,
+                    cell.reference.clone(),
+                    format!("formula result is the error value `{code}`"),
+                    true,
+                ));
+            }
             if cell.formula.is_some() && cell.cached.is_none() && cell.value.is_empty() {
                 issues.push(Issue::new(
                     "inspect.types.formula-without-cache",
