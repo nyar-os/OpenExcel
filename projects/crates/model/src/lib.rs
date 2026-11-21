@@ -284,6 +284,7 @@ pub fn cell(handle: u64, request: &Value) -> Result<Value, ServiceError> {
                 "formula": cell.formula,
                 "value": primitive(&eval::value_of(cell)),
                 "cached": cell.cached.as_ref().map(primitive).unwrap_or(Value::Null),
+                "computedState": cell.computed_state,
             }),
             None => json!({
                 "sheet": sheet.name,
@@ -292,6 +293,7 @@ pub fn cell(handle: u64, request: &Value) -> Result<Value, ServiceError> {
                 "formula": Value::Null,
                 "value": Value::Null,
                 "cached": Value::Null,
+                "computedState": Value::Null,
             }),
         })
     })?

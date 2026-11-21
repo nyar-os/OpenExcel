@@ -269,6 +269,11 @@ export interface CellDetail {
     readonly value: CellPrimitive;
     /** Value the source workbook carried next to the formula, when it had one. */
     readonly cached: CellPrimitive;
+    /**
+     * How the last evaluation ended: `unsupported` when the engine kept the
+     * cached value because it cannot evaluate a function in the formula.
+     */
+    readonly computedState: 'computed' | 'unsupported' | null;
 }
 
 /** One cell of a range matrix. */
