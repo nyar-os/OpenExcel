@@ -27,7 +27,7 @@ use serde_json::{Map, Value, json};
 
 pub use error::ServiceError;
 
-use model::{CellValue, PROJECT_FORMAT, PROJECT_VERSION, Project, Sheet};
+use model::{CellRange, CellValue, PROJECT_FORMAT, PROJECT_VERSION, Project, Sheet};
 
 /// Workbook formats the product classifies.
 pub const WORKBOOK_FORMATS: &[&str] = &["xlsx", "xlsm", "xltx", "xls", "csv", "tsv", "ods", "json", "xml", "pdf"];
@@ -67,6 +67,10 @@ pub fn capabilities() -> Value {
         "project": "supported",
         "formats": Value::Object(formats),
         "checks": Value::Object(checks),
+        "formulas": {
+            "functions": eval::FUNCTIONS,
+            "unsupportedBehavior": "preserve-cached",
+        },
         "renderers": {
             "svg": "supported",
             "png": "unsupported",
@@ -339,6 +343,101 @@ pub fn range(handle: u64, request: &Value) -> Result<Value, ServiceError> {
     })?
 }
 
+/// Searches evaluated values and formula sources of one open workbook.
+///
+/// Returns at most [`MAX_FIND_HITS`] hits with character offsets into the
+/// matched field.
+pub fn find(handle: u64, request: &Value) -> Result<Value, ServiceError> {
+    store::with(handle, |entry| -> Result<Value, ServiceError> {
+        let query = request
+            .get("query")
+            .and_then(Value::as_str)
+            .filter(|query| !query.is_empty())
+            .ok_or_else(|| ServiceError::argument("`find` needs a non-empty `query`"))?;
+        let options = request.get("options");
+        let match_case = options.and_then(|options| options.get("matchCase")).and_then(Value::as_bool).unwrap_or(false);
+        let search_formulas = options.and_then(|options| options.get("formulas")).and_then(Value::as_bool).unwrap_or(true);
+        let search_values = options.and_then(|options| options.get("values")).and_then(Value::as_bool).unwrap_or(true);
+        let key = request.get("sheet").and_then(Value::as_str).unwrap_or("");
+        let sheets: Vec<usize> = if key.is_empty() {
+            (0..entry.project.sheets.len()).collect()
+        }
+        else {
+            vec![entry.project.sheet_index(key).ok_or_else(|| missing_sheet(key))?]
+        };
+
+        let mut hits: Vec<Value> = Vec::new();
+        'sheets: for sheet_index in sheets {
+            let sheet = &entry.project.sheets[sheet_index];
+            for cell in &sheet.cells {
+                if search_values {
+                    let text = eval::value_of(cell).display_text();
+                    for (start, end) in occurrence_spans(&text, query, match_case) {
+                        if hits.len() >= MAX_FIND_HITS {
+                            break 'sheets;
+                        }
+                        hits.push(json!({
+                            "sheet": sheet.name,
+                            "address": cell.reference,
+                            "field": "value",
+                            "start": start,
+                            "end": end,
+                            "text": slice_chars(&text, start, end),
+                        }));
+                    }
+                }
+                if search_formulas && let Some(formula) = &cell.formula {
+                    for (start, end) in occurrence_spans(formula, query, match_case) {
+                        if hits.len() >= MAX_FIND_HITS {
+                            break 'sheets;
+                        }
+                        hits.push(json!({
+                            "sheet": sheet.name,
+                            "address": cell.reference,
+                            "field": "formula",
+                            "start": start,
+                            "end": end,
+                            "text": slice_chars(formula, start, end),
+                        }));
+                    }
+                }
+            }
+        }
+        Ok(Value::Array(hits))
+    })?
+}
+
+/// Upper bound on the hits one `find` request returns.
+const MAX_FIND_HITS: usize = 500;
+
+fn occurrence_spans(text: &str, query: &str, match_case: bool) -> Vec<(usize, usize)> {
+    let haystack: Vec<char> = text.chars().collect();
+    let needle: Vec<char> = query.chars().collect();
+    let mut spans = Vec::new();
+    if needle.is_empty() {
+        return spans;
+    }
+    let mut index = 0usize;
+    while index + needle.len() <= haystack.len() {
+        if haystack[index..index + needle.len()]
+            .iter()
+            .zip(&needle)
+            .all(|(left, right)| char_matches(*left, *right, match_case))
+        {
+            spans.push((index, index + needle.len()));
+            index += needle.len();
+        }
+        else {
+            index += 1;
+        }
+    }
+    spans
+}
+
+fn slice_chars(text: &str, start: usize, end: usize) -> String {
+    text.chars().skip(start).take(end.saturating_sub(start)).collect()
+}
+
 /// Recomputes every formula of one open workbook.
 pub fn recalculate(handle: u64) -> Result<Value, ServiceError> {
     store::with_mut(handle, |entry| {
@@ -468,9 +567,16 @@ fn verify_xlsx(project: &Project, bytes: &[u8]) -> Result<(), ServiceError> {
         }
         for (expected, actual) in written.cells.iter().zip(&read.cells) {
             // Formula cells carry their result in `computed`/`cached`, so compare
-            // what a reader sees rather than the optional literal fallback.
+            // what a reader sees rather than the optional literal fallback. An
+            // unsupported formula writes only the imported cache.
+            let expected_value = if expected.computed_state == Some(model::ComputedState::Unsupported) {
+                expected.cached.clone().unwrap_or(CellValue::Empty)
+            }
+            else {
+                eval::value_of(expected)
+            };
             if expected.reference != actual.reference
-                || eval::value_of(expected) != eval::value_of(actual)
+                || expected_value != eval::value_of(actual)
                 || expected.formula != actual.formula
             {
                 return Err(ServiceError::io(format!(
@@ -499,23 +605,24 @@ pub fn edit(handle: u64, request: &Value) -> Result<Value, ServiceError> {
             .and_then(Value::as_array)
             .ok_or_else(|| ServiceError::argument("an edit request needs an `operations` array"))?;
         let mut project = entry.project.clone();
+        let mut replacements = 0usize;
         for operation in operations {
-            apply_operation(&mut project, operation)?;
+            replacements += apply_operation(&mut project, operation)?;
         }
         project.normalize();
         eval::recalculate(&mut project);
         entry.project = project;
         entry.revision += 1;
-        Ok(json!({ "revision": entry.revision, "workbook": summary_json(handle, entry) }))
+        Ok(json!({ "revision": entry.revision, "workbook": summary_json(handle, entry), "replacements": replacements }))
     })?
 }
 
-fn apply_operation(project: &mut Project, operation: &Value) -> Result<(), ServiceError> {
+fn apply_operation(project: &mut Project, operation: &Value) -> Result<usize, ServiceError> {
     let kind = operation
         .get("op")
         .and_then(Value::as_str)
         .ok_or_else(|| ServiceError::argument("each operation needs an `op` field"))?;
-    match kind {
+    let replacements = match kind {
         "cell.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
@@ -536,6 +643,7 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<(), Servi
                 return Err(ServiceError::argument("`cell.set` needs a `value` or a `formula`"));
             }
             sheet.write_cell(row, column, value, formula, None);
+            0
         }
         "sheet.add" => {
             let name = required_name(operation)?;
@@ -550,6 +658,7 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<(), Servi
             sheet.index = index as u32;
             project.sheets.insert(index, sheet);
             project.reindex();
+            0
         }
         "sheet.rename" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
@@ -560,6 +669,7 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<(), Servi
                 return Err(ServiceError::argument(format!("sheet `{name}` already exists")));
             }
             project.sheets[index].name = name;
+            0
         }
         "sheet.remove" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
@@ -569,6 +679,34 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<(), Servi
             }
             project.sheets.remove(index);
             project.reindex();
+            0
+        }
+        "sheet.setVisibility" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;
+            let requested = operation
+                .get("visibility")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|visibility| !visibility.is_empty())
+                .ok_or_else(|| ServiceError::argument("`sheet.setVisibility` needs `visible`, `hidden` or `veryHidden`"))?;
+            let visibility = match requested.to_ascii_lowercase().as_str() {
+                "visible" => model::SheetVisibility::Visible,
+                "hidden" => model::SheetVisibility::Hidden,
+                "veryhidden" => model::SheetVisibility::VeryHidden,
+                _ => {
+                    return Err(ServiceError::argument(format!(
+                        "`{requested}` is not a sheet visibility; expected `visible`, `hidden` or `veryHidden`"
+                    )));
+                }
+            };
+            if !visibility.is_visible()
+                && project.sheets.iter().enumerate().all(|(other, sheet)| other == index || !sheet.visibility.is_visible())
+            {
+                return Err(ServiceError::argument("a workbook must keep at least one visible sheet"));
+            }
+            project.sheets[index].visibility = visibility;
+            0
         }
         "range.clear" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
@@ -579,6 +717,7 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<(), Servi
                 .and_then(reference::parse_range)
                 .ok_or_else(|| ServiceError::argument("`range.clear` needs an A1 range such as `A1:C4`"))?;
             sheet.clear_range(&range);
+            0
         }
         "range.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
@@ -607,6 +746,7 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<(), Servi
                     sheet.write_cell(row, column, value, formula, None);
                 }
             }
+            0
         }
         "format.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
@@ -630,11 +770,108 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<(), Servi
                         cached: None,
                         style: None,
                         computed: None,
+                        computed_state: None,
                     });
                     cell.style = Some(merge_style(cell.style.as_ref(), &style));
                     sheet.set_cell(cell);
                 }
             }
+            0
+        }
+        "merge.set" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let start = operation
+                .get("start")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_reference)
+                .ok_or_else(|| ServiceError::argument("`merge.set` needs an A1 `start` such as `A1`"))?;
+            let end = operation
+                .get("end")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_reference)
+                .ok_or_else(|| ServiceError::argument("`merge.set` needs an A1 `end` such as `B2`"))?;
+            let merge = operation
+                .get("merge")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| ServiceError::argument("`merge.set` needs a boolean `merge`"))?;
+            let range = CellRange::between(start.0, start.1, end.0, end.1);
+            if !range.is_valid() || range.end_row > 1_048_576 || range.end_column > 16_384 {
+                return Err(ServiceError::argument(format!("merged range `{}` leaves the sheet grid", range.reference())));
+            }
+            if merge {
+                if let Some(other) = sheet.merged.iter().find(|other| **other != range && other.overlaps(&range)) {
+                    return Err(ServiceError::argument(format!(
+                        "merged range `{}` overlaps `{}`",
+                        range.reference(),
+                        other.reference()
+                    )));
+                }
+                if !sheet.merged.contains(&range) {
+                    sheet.merged.push(range);
+                }
+            }
+            else {
+                sheet.merged.retain(|existing| !existing.overlaps(&range));
+            }
+            0
+        }
+        "freeze.set" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let row = operation
+                .get("row")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| ServiceError::argument("`freeze.set` needs a non-negative `row`"))?;
+            let column = operation
+                .get("column")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| ServiceError::argument("`freeze.set` needs a non-negative `column`"))?;
+            if row > 1_048_576 || column > 16_384 {
+                return Err(ServiceError::argument("the frozen pane leaves the sheet grid"));
+            }
+            sheet.freeze =
+                if row == 0 && column == 0 { None } else { Some(model::Freeze { columns: column as u32, rows: row as u32 }) };
+            0
+        }
+        "cell.replaceText" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let range = operation
+                .get("range")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`cell.replaceText` needs an A1 range such as `A1:C4`"))?;
+            let find = operation
+                .get("find")
+                .and_then(Value::as_str)
+                .filter(|find| !find.is_empty())
+                .ok_or_else(|| ServiceError::argument("`cell.replaceText` needs a non-empty `find`"))?;
+            let replacement = operation.get("replace").and_then(Value::as_str).unwrap_or("");
+            let match_case = operation.get("matchCase").and_then(Value::as_bool).unwrap_or(false);
+            let mut replacements = 0usize;
+            for row in range.start_row..=range.end_row {
+                for column in range.start_column..=range.end_column {
+                    let Some(mut cell) = sheet.cell(row, column).cloned()
+                    else {
+                        continue;
+                    };
+                    if cell.formula.is_some() {
+                        continue;
+                    }
+                    let CellValue::Text { text } = &cell.value
+                    else {
+                        continue;
+                    };
+                    let (next, replaced) = replace_occurrences(text, find, replacement, match_case);
+                    if replaced > 0 {
+                        replacements += replaced;
+                        cell.value = CellValue::text(next);
+                        sheet.set_cell(cell);
+                    }
+                }
+            }
+            replacements
         }
         "sheet.duplicate" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
@@ -654,6 +891,7 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<(), Servi
             let insert = index + 1;
             project.sheets.insert(insert, copy);
             project.reindex();
+            0
         }
         "sheet.move" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
@@ -667,10 +905,44 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<(), Servi
             let target = target.min(project.sheets.len());
             project.sheets.insert(target, sheet);
             project.reindex();
+            0
         }
         other => return Err(ServiceError::new("object/unsupported", format!("edit operation `{other}` is not supported"))),
+    };
+    Ok(replacements)
+}
+
+/// Replaces every non-overlapping occurrence and reports how many it replaced.
+fn replace_occurrences(text: &str, find: &str, replacement: &str, match_case: bool) -> (String, usize) {
+    let haystack: Vec<char> = text.chars().collect();
+    let needle: Vec<char> = find.chars().collect();
+    if needle.is_empty() {
+        return (text.to_owned(), 0);
     }
-    Ok(())
+    let mut output = String::new();
+    let mut replacements = 0usize;
+    let mut index = 0usize;
+    while index < haystack.len() {
+        if index + needle.len() <= haystack.len()
+            && haystack[index..index + needle.len()]
+                .iter()
+                .zip(&needle)
+                .all(|(left, right)| char_matches(*left, *right, match_case))
+        {
+            output.push_str(replacement);
+            replacements += 1;
+            index += needle.len();
+        }
+        else {
+            output.push(haystack[index]);
+            index += 1;
+        }
+    }
+    (output, replacements)
+}
+
+fn char_matches(left: char, right: char, match_case: bool) -> bool {
+    left == right || (!match_case && left.eq_ignore_ascii_case(&right))
 }
 
 /// Reads one `range.set` entry: a primitive literal or `{ formula, value? }`.

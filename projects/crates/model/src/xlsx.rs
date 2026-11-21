@@ -13,7 +13,10 @@ use document_formats::import::xlsx::{
 
 use crate::{
     error::ServiceError,
-    model::{Cell, CellRange, CellStyle, CellValue, Freeze, Project, Sheet, SheetColumn, SheetRow, SheetVisibility, Styles},
+    model::{
+        Cell, CellRange, CellStyle, CellValue, ComputedState, Freeze, Project, Sheet, SheetColumn, SheetRow, SheetVisibility,
+        Styles,
+    },
     reference::format_reference,
 };
 
@@ -83,6 +86,7 @@ pub fn project_from_workbook(workbook: XlsxWorkbook, title: impl Into<String>) -
                         cached,
                         style,
                         computed: None,
+                        computed_state: None,
                     })
                 })
                 .collect();
@@ -345,11 +349,14 @@ fn cell_xml(cell: &Cell, table: &StyleTable) -> String {
         None => String::new(),
     };
     let reference = escape_attribute(&cell.reference);
-    // A formula writes the freshly evaluated result as its cached `<v>`. The
-    // imported cache and the stored literal are only fallbacks for projects
-    // that were never evaluated.
-    let cached =
-        cell.computed.clone().or_else(|| cell.cached.clone()).or_else(|| (!cell.value.is_empty()).then(|| cell.value.clone()));
+    // An unsupported formula has no trustworthy engine result, so its `<v>`
+    // stays the value the source writer cached instead of `#NAME?`.
+    let cached = if cell.computed_state == Some(ComputedState::Unsupported) {
+        cell.cached.clone()
+    }
+    else {
+        cell.computed.clone().or_else(|| cell.cached.clone()).or_else(|| (!cell.value.is_empty()).then(|| cell.value.clone()))
+    };
 
     let mut body = format!("<c r=\"{reference}\"{style_attribute}");
     match &cell.formula {
