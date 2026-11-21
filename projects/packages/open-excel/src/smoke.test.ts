@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { formatFromPath, formatInfo, OpenExcel, OpenExcelError, workbookFormats } from './index.js';
-import type { WorkbookInput } from './index.js';
+import type { Workbook, WorkbookInput } from './index.js';
 import { nativeBinding } from './native.js';
 
 const installed = (() => {
@@ -97,6 +97,39 @@ test('create rejects empty titles synchronously', async () => {
         excel.create({ template: '' }),
         (error: unknown) => error instanceof OpenExcelError && error.code === 'session/argument-invalid',
     );
+    await excel.dispose();
+});
+
+test('save, edit, export and render validate arguments before reaching the engine', async () => {
+    const excel = new OpenExcel();
+    const workbook = { id: 'workbook-0', revision: 0, title: 'Fixture', sheets: [], cells: 0 } as unknown as Workbook;
+    const invalid = (error: unknown) => error instanceof OpenExcelError && error.code === 'session/argument-invalid';
+
+    await assert.rejects(excel.save(workbook, { target: '' }), invalid);
+    await assert.rejects(excel.edit(workbook, { operations: [] }), invalid);
+    await assert.rejects(
+        excel.edit(workbook, { expectedRevision: -1, operations: [{ op: 'sheet.add', name: 'Second' }] }),
+        invalid,
+    );
+    await assert.rejects(
+        excel.edit(workbook, { operations: [{} as never] }),
+        invalid,
+    );
+    await assert.rejects(excel.export(workbook, { format: 'csv', target: '' }), invalid);
+    await assert.rejects(
+        excel.render(workbook, { format: 'png' }),
+        (error: unknown) => error instanceof OpenExcelError && error.code === 'format/unsupported',
+    );
+    await excel.dispose();
+});
+
+test('tracked operations reject unknown workbooks before reaching the engine', async () => {
+    const excel = new OpenExcel();
+    const workbook = { id: 'workbook-404', revision: 0, title: 'Fixture', sheets: [], cells: 0 } as unknown as Workbook;
+    const missing = (error: unknown) => error instanceof OpenExcelError && error.code === 'workbook/not-found';
+    await assert.rejects(excel.summary(workbook), missing);
+    await assert.rejects(excel.save(workbook, { target: 'fixture.oexcel' }), missing);
+    await assert.rejects(excel.export(workbook, { format: 'csv', target: 'fixture.csv' }), missing);
     await excel.dispose();
 });
 
