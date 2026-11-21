@@ -1,0 +1,181 @@
+//! Delimited text (CSV/TSV) reading and writing.
+//!
+//! Quoted fields keep embedded delimiters and newlines; `""` inside a quoted
+//! field becomes one quote. Unquoted numeric fields become numbers, everything
+//! else stays text.
+
+use crate::model::{Cell, CellValue, Project, Sheet};
+
+/// One parsed field with its quoting state.
+pub struct Field {
+    /// Decoded field text.
+    pub text: String,
+    /// Whether the field was written inside quotes.
+    pub quoted: bool,
+}
+
+/// Splits delimited text into records. Blank lines are skipped.
+pub fn parse(text: &str, delimiter: char) -> Vec<Vec<Field>> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut records = Vec::new();
+    let mut record: Vec<Field> = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false;
+    let mut in_quotes = false;
+    let mut characters = text.chars().peekable();
+
+    while let Some(character) = characters.next() {
+        if in_quotes {
+            if character == '"' {
+                if characters.peek() == Some(&'"') {
+                    characters.next();
+                    field.push('"');
+                }
+                else {
+                    in_quotes = false;
+                }
+            }
+            else {
+                field.push(character);
+            }
+            continue;
+        }
+        if character == '"' && field.is_empty() {
+            in_quotes = true;
+            quoted = true;
+        }
+        else if character == delimiter {
+            record.push(Field { text: std::mem::take(&mut field), quoted });
+            quoted = false;
+        }
+        else if character == '\r' || character == '\n' {
+            if character == '\r' && characters.peek() == Some(&'\n') {
+                characters.next();
+            }
+            record.push(Field { text: std::mem::take(&mut field), quoted });
+            quoted = false;
+            push_record(&mut records, std::mem::take(&mut record));
+        }
+        else {
+            field.push(character);
+        }
+    }
+
+    if !field.is_empty() || quoted || !record.is_empty() {
+        record.push(Field { text: field, quoted });
+        push_record(&mut records, record);
+    }
+    records
+}
+
+fn push_record(records: &mut Vec<Vec<Field>>, record: Vec<Field>) {
+    let blank = record.len() == 1 && record[0].text.is_empty() && !record[0].quoted;
+    if !blank {
+        records.push(record);
+    }
+}
+
+/// Builds a one-sheet project from delimited text.
+pub fn project_from_csv(title: impl Into<String>, text: &str, delimiter: char) -> Project {
+    let records = parse(text, delimiter);
+    let mut project = Project::blank(title);
+    let sheet = &mut project.sheets[0];
+    for (row_index, record) in records.iter().enumerate() {
+        for (column_index, field) in record.iter().enumerate() {
+            if field.text.is_empty() && !field.quoted {
+                continue;
+            }
+            let value = if !field.quoted && looks_numeric(&field.text) {
+                CellValue::number(field.text.parse::<f64>().unwrap_or(0.0))
+            }
+            else {
+                CellValue::text(&field.text)
+            };
+            let row = row_index as u32 + 1;
+            let column = column_index as u32 + 1;
+            sheet.set_cell(Cell {
+                reference: crate::reference::format_reference(row, column),
+                row,
+                column,
+                value,
+                formula: None,
+                cached: None,
+                style: None,
+            });
+        }
+    }
+    sheet.dimension = sheet.actual_range();
+    project
+}
+
+fn looks_numeric(text: &str) -> bool {
+    let mut has_digit = false;
+    for character in text.chars() {
+        if character.is_ascii_digit() {
+            has_digit = true;
+        }
+        else if !matches!(character, '+' | '-' | '.' | 'e' | 'E') {
+            return false;
+        }
+    }
+    has_digit
+}
+
+/// Serializes one sheet as delimited text with a trailing newline per row.
+pub fn write(sheet: &Sheet, delimiter: char) -> String {
+    let Some(bounds) = sheet.actual_range()
+    else {
+        return String::new();
+    };
+    let mut output = String::new();
+    for row in 1..=bounds.end_row {
+        let mut cells = Vec::new();
+        for column in 1..=bounds.end_column {
+            cells.push(escape(&sheet.cell(row, column).map(|cell| cell.value.display_text()).unwrap_or_default(), delimiter));
+        }
+        output.push_str(&cells.join(&delimiter.to_string()));
+        output.push('\n');
+    }
+    output
+}
+
+/// Quotes a field when it contains the delimiter, a quote or a line break.
+pub fn escape(text: &str, delimiter: char) -> String {
+    if text.contains(delimiter) || text.contains('"') || text.contains('\n') || text.contains('\r') {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    }
+    else {
+        text.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_quotes_escapes_and_embedded_newlines() {
+        let records = parse("name,note\r\n\"Doe, Jane\",\"line 1\nline 2\"\nplain,\"say \"\"hi\"\"\"\n", ',');
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0][0].text, "name");
+        assert_eq!(records[1][0].text, "Doe, Jane");
+        assert_eq!(records[1][1].text, "line 1\nline 2");
+        assert_eq!(records[2][1].text, "say \"hi\"");
+    }
+
+    #[test]
+    fn infers_numbers_only_for_unquoted_fields() {
+        let project = project_from_csv("Data", "id,amount\n1,\"2.5\"\n2,3.5\n", ',');
+        let sheet = &project.sheets[0];
+        assert_eq!(sheet.cell(2, 1).expect("cell").value, CellValue::number(1.0));
+        assert_eq!(sheet.cell(2, 2).expect("cell").value, CellValue::text("2.5"));
+        assert_eq!(sheet.cell(3, 2).expect("cell").value, CellValue::number(3.5));
+    }
+
+    #[test]
+    fn writes_escaped_fields() {
+        let project = project_from_csv("Data", "a\n\"x,y\"\n", ',');
+        let text = write(&project.sheets[0], ',');
+        assert_eq!(text, "a\n\"x,y\"\n");
+    }
+}
