@@ -3,10 +3,7 @@
 //! Handles, revisions and the undo stack live in the shared `document-session`
 //! store. This module keeps only the workbook state a handle points at.
 
-use std::{
-    path::PathBuf,
-    sync::LazyLock,
-};
+use std::{path::PathBuf, sync::LazyLock};
 
 use document_session::Store;
 

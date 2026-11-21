@@ -15,7 +15,9 @@ mod model;
 mod pdf;
 mod reference;
 mod render;
+mod shift;
 mod store;
+mod structure;
 mod xlsx;
 
 use std::{
@@ -945,7 +947,8 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                 .get("row")
                 .and_then(Value::as_u64)
                 .filter(|row| (1..=1_048_576).contains(row))
-                .ok_or_else(|| ServiceError::argument("`row.setHeight` needs a `row` between 1 and 1048576"))? as u32;
+                .ok_or_else(|| ServiceError::argument("`row.setHeight` needs a `row` between 1 and 1048576"))?
+                as u32;
             let height = required_number(operation, "height", "`row.setHeight` needs a numeric `height`")?;
             if !(0.0..=409.0).contains(&height) {
                 return Err(ServiceError::argument(format!("row height {height} must be between 0 and 409")));
@@ -1027,6 +1030,22 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             let target = target.min(project.sheets.len());
             project.sheets.insert(target, sheet);
             project.reindex();
+            0
+        }
+        "row.insert" => {
+            structure::insert_rows(project, operation)?;
+            0
+        }
+        "row.delete" => {
+            structure::delete_rows(project, operation)?;
+            0
+        }
+        "column.insert" => {
+            structure::insert_columns(project, operation)?;
+            0
+        }
+        "column.delete" => {
+            structure::delete_columns(project, operation)?;
             0
         }
         other => return Err(ServiceError::new("object/unsupported", format!("edit operation `{other}` is not supported"))),
@@ -1132,9 +1151,7 @@ fn fill_series(project: &mut Project, operation: &Value) -> Result<CellRange, Se
         None => match seeds.first() {
             Some(CellValue::Number { number }) => (*number, true),
             _ => {
-                return Err(ServiceError::argument(
-                    "`range.fillSeries` needs a numeric first cell or an explicit `start`",
-                ));
+                return Err(ServiceError::argument("`range.fillSeries` needs a numeric first cell or an explicit `start`"));
             }
         },
     };
@@ -1200,13 +1217,8 @@ fn transpose(project: &mut Project, operation: &Value) -> Result<CellRange, Serv
         )));
     }
     let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
-    if let Some(merged) =
-        sheet.merged.iter().find(|merged| merged.overlaps(&range) || merged.overlaps(&destination))
-    {
-        return Err(ServiceError::argument(format!(
-            "`range.transpose` cannot move merged range `{}`",
-            merged.reference()
-        )));
+    if let Some(merged) = sheet.merged.iter().find(|merged| merged.overlaps(&range) || merged.overlaps(&destination)) {
+        return Err(ServiceError::argument(format!("`range.transpose` cannot move merged range `{}`", merged.reference())));
     }
     let matrix = (range.start_row..=range.end_row)
         .map(|row| (range.start_column..=range.end_column).map(|column| sheet.cell(row, column).cloned()).collect::<Vec<_>>())
@@ -1492,7 +1504,7 @@ fn unique_sheet_name(project: &Project, base: &str) -> String {
     }
 }
 
-fn missing_sheet(key: &str) -> ServiceError {
+pub(crate) fn missing_sheet(key: &str) -> ServiceError {
     if key.is_empty() {
         ServiceError::argument("an operation needs a `sheet` name or id")
     }

@@ -672,8 +672,11 @@ fn fill_series_writes_linear_numbers_and_rejects_bad_ranges() {
         &json!({ "operations": [{ "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [[2], [5]] }] }),
     )
     .expect("seed");
-    crate::edit(handle, &json!({ "operations": [{ "op": "format.set", "sheet": "Sheet1", "range": "A3", "style": { "bold": true } }] }))
-        .expect("style");
+    crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "format.set", "sheet": "Sheet1", "range": "A3", "style": { "bold": true } }] }),
+    )
+    .expect("style");
 
     let edited = crate::edit(
         handle,
@@ -769,10 +772,7 @@ fn transpose_moves_cells_into_the_target_rectangle() {
     )
     .expect("transpose");
     assert_eq!(edited["revision"], json!(2));
-    assert_eq!(
-        edited["affected"],
-        json!([{ "op": "range.transpose", "sheet": "Sheet1", "range": "E1:F3" }])
-    );
+    assert_eq!(edited["affected"], json!([{ "op": "range.transpose", "sheet": "Sheet1", "range": "E1:F3" }]));
 
     let project = project_of(handle);
     let sheet = project.sheet("Sheet1").expect("sheet");
@@ -789,11 +789,9 @@ fn transpose_moves_cells_into_the_target_rectangle() {
     assert_eq!(style.bold, Some(true));
     assert_eq!(style.fill.as_deref(), Some("#ffeeaa"));
 
-    let missing = crate::edit(
-        handle,
-        &json!({ "operations": [{ "op": "range.transpose", "sheet": "Sheet1", "range": "A1:B2" }] }),
-    )
-    .expect_err("missing target");
+    let missing =
+        crate::edit(handle, &json!({ "operations": [{ "op": "range.transpose", "sheet": "Sheet1", "range": "A1:B2" }] }))
+            .expect_err("missing target");
     assert_eq!(missing.code, "session/argument-invalid");
     let overlap = crate::edit(
         handle,

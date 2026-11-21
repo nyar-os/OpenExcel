@@ -84,6 +84,7 @@ pub fn write(sheet: &Sheet, delimiter: char) -> String {
 }
 
 /// Quotes a field when it contains the delimiter, a quote or a line break.
+#[allow(dead_code)]
 pub fn escape(text: &str, delimiter: char) -> String {
     escape_field(text, delimiter)
 }

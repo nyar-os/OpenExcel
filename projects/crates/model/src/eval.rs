@@ -38,7 +38,8 @@ pub(crate) fn recalculate(project: &mut Project) -> usize {
             let key = (sheet_index, cell.row, cell.column);
             let (next, state) = if cell.formula.is_some() {
                 let value = report.values.get(&key).map(from_shared).unwrap_or_else(|| CellValue::error("#VALUE!"));
-                let state = if report.unsupported.contains(&key) { ComputedState::Unsupported } else { ComputedState::Computed };
+                let state =
+                    if report.unsupported.contains(&key) { ComputedState::Unsupported } else { ComputedState::Computed };
                 (Some(value), Some(state))
             }
             else {

@@ -6,13 +6,15 @@
 //! writer, so styles, merges, column widths and frozen panes have one
 //! implementation.
 
-use document_formats::export::xlsx::export_xlsx_bytes;
-use document_formats::import::xlsx::{
-    import_xlsx_bytes,
-    model::{
-        CellFormula, CellRange as XlsxRange, CellStyle as XlsxStyle, CellValue as XlsxValue, FormulaKind, FreezePane,
-        HorizontalAlign, SheetColumn as XlsxColumn, SheetRow as XlsxRow, SheetVisibility as XlsxVisibility, VerticalAlign,
-        XlsxCell, XlsxSheet, XlsxWorkbook,
+use document_formats::{
+    export::xlsx::export_xlsx_bytes,
+    import::xlsx::{
+        import_xlsx_bytes,
+        model::{
+            CellFormula, CellRange as XlsxRange, CellStyle as XlsxStyle, CellValue as XlsxValue, FormulaKind, FreezePane,
+            HorizontalAlign, SheetColumn as XlsxColumn, SheetRow as XlsxRow, SheetVisibility as XlsxVisibility, VerticalAlign,
+            XlsxCell, XlsxSheet, XlsxWorkbook,
+        },
     },
 };
 
@@ -204,7 +206,12 @@ fn workbook_from_project(project: &Project) -> XlsxWorkbook {
             written.rows = sheet
                 .rows
                 .iter()
-                .map(|row| XlsxRow { index: row.index, height: row.height, custom_height: row.custom_height, hidden: row.hidden })
+                .map(|row| XlsxRow {
+                    index: row.index,
+                    height: row.height,
+                    custom_height: row.custom_height,
+                    hidden: row.hidden,
+                })
                 .collect();
             written.merged = sheet.merged.iter().map(range_to).collect();
             written.freeze = sheet.freeze.map(|freeze| FreezePane { columns: freeze.columns, rows: freeze.rows });
@@ -220,7 +227,10 @@ fn workbook_from_project(project: &Project) -> XlsxWorkbook {
                             cell.cached.clone()
                         }
                         else {
-                            cell.computed.clone().or_else(|| cell.cached.clone()).or_else(|| (!cell.value.is_empty()).then(|| cell.value.clone()))
+                            cell.computed
+                                .clone()
+                                .or_else(|| cell.cached.clone())
+                                .or_else(|| (!cell.value.is_empty()).then(|| cell.value.clone()))
                         };
                         CellFormula {
                             source: source.trim().trim_start_matches('=').to_owned(),
@@ -246,7 +256,12 @@ fn workbook_from_project(project: &Project) -> XlsxWorkbook {
 }
 
 fn range_to(range: &CellRange) -> XlsxRange {
-    XlsxRange { start_row: range.start_row, end_row: range.end_row, start_column: range.start_column, end_column: range.end_column }
+    XlsxRange {
+        start_row: range.start_row,
+        end_row: range.end_row,
+        start_column: range.start_column,
+        end_column: range.end_column,
+    }
 }
 
 fn value_to_xlsx(value: &CellValue) -> XlsxValue {

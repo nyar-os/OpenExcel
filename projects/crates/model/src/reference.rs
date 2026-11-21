@@ -35,7 +35,8 @@ pub fn parse_reference(text: &str) -> Option<(u32, u32)> {
 /// Parses `A1` or `A1:B2` text into an inclusive rectangle.
 pub fn parse_range(text: &str) -> Option<CellRange> {
     let ((start_row, start_column), (end_row, end_column)) = a1::parse_range(text)?;
-    (start_column <= MAX_COLUMN && end_column <= MAX_COLUMN).then(|| CellRange::between(start_row, start_column, end_row, end_column))
+    (start_column <= MAX_COLUMN && end_column <= MAX_COLUMN)
+        .then(|| CellRange::between(start_row, start_column, end_row, end_column))
 }
 
 #[cfg(test)]
