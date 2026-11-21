@@ -664,6 +664,86 @@ fn range_sort_orders_whole_rows_and_rejects_merges() {
 }
 
 #[test]
+fn fill_series_writes_linear_numbers_and_rejects_bad_ranges() {
+    let created = crate::create(&json!({ "title": "Series" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [[2], [5]] }] }),
+    )
+    .expect("seed");
+    crate::edit(handle, &json!({ "operations": [{ "op": "format.set", "sheet": "Sheet1", "range": "A3", "style": { "bold": true } }] }))
+        .expect("style");
+
+    let edited = crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.fillSeries", "sheet": "Sheet1", "range": "A1:A5" },
+                { "op": "range.fillSeries", "sheet": "Sheet1", "range": "C1:F1", "start": 10, "step": -2 },
+            ]
+        }),
+    )
+    .expect("fill");
+    assert_eq!(edited["revision"], json!(3));
+    assert_eq!(
+        edited["affected"],
+        json!([
+            { "op": "range.fillSeries", "sheet": "Sheet1", "range": "A1:A5" },
+            { "op": "range.fillSeries", "sheet": "Sheet1", "range": "C1:F1" },
+        ])
+    );
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    let vertical = (1..=5)
+        .map(|row| match sheet.cell(row, 1).map(|cell| cell.value.clone()) {
+            Some(CellValue::Number { number }) => number,
+            other => panic!("A{row} is {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(vertical, vec![2.0, 5.0, 8.0, 11.0, 14.0]);
+    let horizontal = (3..=6)
+        .map(|column| match sheet.cell(1, column).map(|cell| cell.value.clone()) {
+            Some(CellValue::Number { number }) => number,
+            other => panic!("row 1 column {column} is {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(horizontal, vec![10.0, 8.0, 6.0, 4.0]);
+    assert_eq!(sheet.cell(3, 1).and_then(|cell| cell.style.as_ref()).and_then(|style| style.bold), Some(true));
+
+    for request in [
+        json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "D1:E2" }] }),
+        json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "H1" }] }),
+        json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "H1:H3" }] }),
+        json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "A1:A3", "start": "x" }] }),
+        json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "A1:A3", "step": "two" }] }),
+    ] {
+        let error = crate::edit(handle, &request).expect_err("invalid series");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    let missing = crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Nope", "range": "A1:A3", "start": 1 }] }),
+    )
+    .expect_err("missing sheet");
+    assert_eq!(missing.code, "object/not-found");
+
+    crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "merge.set", "sheet": "Sheet1", "start": "J1", "end": "J2", "merge": true }] }),
+    )
+    .expect("merge");
+    let merged = crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "J1:J5", "start": 1 }] }),
+    )
+    .expect_err("merged range");
+    assert_eq!(merged.code, "session/argument-invalid");
+    crate::close(handle).expect("close");
+}
+
+#[test]
 fn pdf_export_writes_a_paginated_document() {
     let created = crate::create(&json!({ "title": "Report" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");
