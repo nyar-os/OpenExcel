@@ -555,8 +555,10 @@ fn find_reports_character_offsets_for_values_and_formulas() {
     )
     .expect("edit");
 
-    let hits = crate::find(handle, &json!({ "query": "find", "options": { "formulas": false } })).expect("find values");
-    assert_eq!(hits.as_array().expect("hits").len(), 3);
+    let report = crate::find(handle, &json!({ "query": "find", "options": { "formulas": false } })).expect("find values");
+    assert_eq!(report["truncated"], json!(false));
+    let hits = report["hits"].as_array().expect("hits");
+    assert_eq!(hits.len(), 3);
     assert_eq!(hits[0]["address"], json!("A1"));
     assert_eq!(hits[0]["field"], json!("value"));
     assert_eq!((hits[0]["start"].clone(), hits[0]["end"].clone()), (json!(0), json!(4)));
@@ -567,13 +569,15 @@ fn find_reports_character_offsets_for_values_and_formulas() {
     assert_eq!(hits[2]["text"], json!("Find"));
 
     let case_sensitive = crate::find(handle, &json!({ "query": "find", "options": { "matchCase": true } })).expect("case");
-    assert_eq!(case_sensitive.as_array().expect("hits").len(), 1);
-    assert_eq!(case_sensitive[0]["start"], json!(8));
+    let case_hits = case_sensitive["hits"].as_array().expect("hits");
+    assert_eq!(case_hits.len(), 1);
+    assert_eq!(case_hits[0]["start"], json!(8));
 
     let formulas = crate::find(handle, &json!({ "query": "LEFT", "options": { "values": false } })).expect("formulas");
-    assert_eq!(formulas.as_array().expect("hits").len(), 1);
-    assert_eq!(formulas[0]["field"], json!("formula"));
-    assert_eq!((formulas[0]["start"].clone(), formulas[0]["end"].clone()), (json!(1), json!(5)));
+    let formula_hits = formulas["hits"].as_array().expect("hits");
+    assert_eq!(formula_hits.len(), 1);
+    assert_eq!(formula_hits[0]["field"], json!("formula"));
+    assert_eq!((formula_hits[0]["start"].clone(), formula_hits[0]["end"].clone()), (json!(1), json!(5)));
 
     let missing = crate::find(handle, &json!({ "query": "find", "sheet": "Nope" })).expect_err("missing sheet");
     assert_eq!(missing.code, "object/not-found");
@@ -581,12 +585,161 @@ fn find_reports_character_offsets_for_values_and_formulas() {
 }
 
 #[test]
+fn find_reports_truncation_at_the_hit_cap() {
+    let created = crate::create(&json!({ "title": "Truncate" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::store::with_mut(handle, |entry| {
+        for row in 1..=620 {
+            entry.project.sheets[0].write_cell(row, 1, CellValue::text("needle"), None, None);
+        }
+    })
+    .expect("seed");
+    let report = crate::find(handle, &json!({ "query": "needle" })).expect("find");
+    assert_eq!(report["truncated"], json!(true));
+    assert_eq!(report["hits"].as_array().expect("hits").len(), 500);
+    crate::close(handle).expect("close");
+}
+
+#[test]
+fn range_sort_orders_whole_rows_and_rejects_merges() {
+    let created = crate::create(&json!({ "title": "Sort" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    ["name", "qty", "double"],
+                    ["b", 2, { "formula": "=B2*2" }],
+                    ["a", 10, { "formula": "=B3*2" }],
+                    ["c", 1, { "formula": "=B4*2" }],
+                ] }
+            ]
+        }),
+    )
+    .expect("seed");
+
+    let sorted = crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.sort", "sheet": "Sheet1", "range": "A1:C4", "column": 3, "ascending": true, "hasHeader": true }
+            ]
+        }),
+    )
+    .expect("sort by the formula column");
+    assert_eq!(sorted["revision"], json!(2));
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 1).expect("A1").value, CellValue::text("name"));
+    assert_eq!(sheet.cell(2, 1).expect("A2").value, CellValue::text("c"));
+    assert_eq!(sheet.cell(3, 1).expect("A3").value, CellValue::text("b"));
+    assert_eq!(sheet.cell(4, 1).expect("A4").value, CellValue::text("a"));
+    // Formulas travel with their row, unchanged.
+    assert_eq!(sheet.cell(2, 3).expect("C2").formula.as_deref(), Some("=B4*2"));
+    assert_eq!(sheet.cell(3, 3).expect("C3").formula.as_deref(), Some("=B2*2"));
+    assert_eq!(sheet.cell(4, 3).expect("C4").formula.as_deref(), Some("=B3*2"));
+    assert_eq!(sheet.cell(2, 3).expect("C2").computed, Some(CellValue::number(20.0)));
+
+    let outside = crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.sort", "sheet": "Sheet1", "range": "A1:C4", "column": 4 }] }),
+    )
+    .expect_err("column outside the range");
+    assert_eq!(outside.code, "session/argument-invalid");
+
+    crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "merge.set", "sheet": "Sheet1", "start": "E1", "end": "F2", "merge": true }] }),
+    )
+    .expect("merge");
+    let merged = crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.sort", "sheet": "Sheet1", "range": "E1:F3", "column": 1 }] }),
+    )
+    .expect_err("merged range");
+    assert_eq!(merged.code, "session/argument-invalid");
+    crate::close(handle).expect("close");
+}
+
+#[test]
+fn pdf_export_writes_a_paginated_document() {
+    let created = crate::create(&json!({ "title": "Report" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    ["name", "qty"],
+                    ["alpha", 10],
+                    ["beta", 20],
+                ] },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "C2", "formula": "=B2*3" },
+                { "op": "format.set", "sheet": "Sheet1", "range": "A1:B1", "style": { "bold": true, "fill": "#ffeeaa" } },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "D1", "end": "E2", "merge": true },
+                { "op": "sheet.add", "name": "Hidden" },
+                { "op": "sheet.setVisibility", "sheet": "Hidden", "visibility": "hidden" },
+            ]
+        }),
+    )
+    .expect("edit");
+
+    let path = temp_path("report", "pdf");
+    let report = crate::export(handle, "pdf", &path, true).expect("export pdf");
+    assert_eq!(report["format"], json!("pdf"));
+    assert_eq!(report["editable"], json!(false));
+    let losses = report["losses"].as_array().expect("losses");
+    assert!(losses.iter().any(|loss| loss["code"] == json!("export.pdf.style-approximated")));
+
+    let bytes = fs::read(&path).expect("read pdf");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.starts_with("%PDF-1.4"));
+    assert!(text.contains("/Type /Catalog"));
+    assert!(text.contains("Sheet1  Page 1 / 1"));
+    assert!(!text.contains("Hidden  Page"));
+    assert!(text.contains("/Count 1"));
+    assert!(text.contains("xref"));
+    assert!(text.contains("trailer"));
+    assert!(text.contains("startxref"));
+    assert!(text.trim_end().ends_with("%%EOF"));
+
+    let csv_path = temp_path("report", "csv");
+    crate::export(handle, "csv", &csv_path, true).expect("csv still works");
+    assert!(fs::read_to_string(&csv_path).expect("csv").starts_with("name,qty"));
+
+    crate::close(handle).expect("close");
+    for path in [path, csv_path] {
+        let _ = fs::remove_file(path);
+    }
+}
+
+#[test]
 fn capabilities_list_the_real_formula_functions() {
     let matrix = crate::capabilities();
     assert_eq!(matrix["formulas"]["unsupportedBehavior"], json!("preserve-cached"));
     let functions = matrix["formulas"]["functions"].as_array().expect("functions");
-    for name in ["VLOOKUP", "INDEX", "MATCH", "IFERROR", "TEXTJOIN", "ROUNDDOWN"] {
+    for name in [
+        "VLOOKUP",
+        "XLOOKUP",
+        "INDEX",
+        "MATCH",
+        "IFERROR",
+        "TEXTJOIN",
+        "ROUNDDOWN",
+        "SUMIF",
+        "SUMIFS",
+        "COUNTIF",
+        "COUNTIFS",
+        "AVERAGEIF",
+        "AVERAGEIFS",
+        "MAXIFS",
+        "MINIFS",
+    ] {
         assert!(functions.contains(&json!(name)), "`{name}` is missing from the capability list");
     }
-    assert!(!functions.contains(&json!("XLOOKUP")));
+    assert_eq!(matrix["exportTargets"]["pdf"], json!("partial"));
+    assert_eq!(matrix["exportLimits"]["pdf"], json!(["style-approximated", "no-images"]));
+    assert_eq!(matrix["renderers"]["pdf"], json!("unsupported"));
 }
