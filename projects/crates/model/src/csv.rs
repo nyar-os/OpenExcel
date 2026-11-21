@@ -1,78 +1,19 @@
 //! Delimited text (CSV/TSV) reading and writing.
 //!
-//! Quoted fields keep embedded delimiters and newlines; `""` inside a quoted
-//! field becomes one quote. Unquoted numeric fields become numbers, everything
-//! else stays text.
+//! The quote state machine lives in `data-text-csv` so every tabular product
+//! shares one parser. This module keeps only the workbook projection: records
+//! become cells, numeric unquoted fields become numbers, and a sheet writes back
+//! through its displayed values.
+
+use data_text_csv::table::{escape_field, parse_records, write_records};
 
 use crate::model::{Cell, CellValue, Project, Sheet};
 
-/// One parsed field with its quoting state.
-pub struct Field {
-    /// Decoded field text.
-    pub text: String,
-    /// Whether the field was written inside quotes.
-    pub quoted: bool,
-}
+pub use data_text_csv::table::Field;
 
 /// Splits delimited text into records. Blank lines are skipped.
 pub fn parse(text: &str, delimiter: char) -> Vec<Vec<Field>> {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let mut records = Vec::new();
-    let mut record: Vec<Field> = Vec::new();
-    let mut field = String::new();
-    let mut quoted = false;
-    let mut in_quotes = false;
-    let mut characters = text.chars().peekable();
-
-    while let Some(character) = characters.next() {
-        if in_quotes {
-            if character == '"' {
-                if characters.peek() == Some(&'"') {
-                    characters.next();
-                    field.push('"');
-                }
-                else {
-                    in_quotes = false;
-                }
-            }
-            else {
-                field.push(character);
-            }
-            continue;
-        }
-        if character == '"' && field.is_empty() {
-            in_quotes = true;
-            quoted = true;
-        }
-        else if character == delimiter {
-            record.push(Field { text: std::mem::take(&mut field), quoted });
-            quoted = false;
-        }
-        else if character == '\r' || character == '\n' {
-            if character == '\r' && characters.peek() == Some(&'\n') {
-                characters.next();
-            }
-            record.push(Field { text: std::mem::take(&mut field), quoted });
-            quoted = false;
-            push_record(&mut records, std::mem::take(&mut record));
-        }
-        else {
-            field.push(character);
-        }
-    }
-
-    if !field.is_empty() || quoted || !record.is_empty() {
-        record.push(Field { text: field, quoted });
-        push_record(&mut records, record);
-    }
-    records
-}
-
-fn push_record(records: &mut Vec<Vec<Field>>, record: Vec<Field>) {
-    let blank = record.len() == 1 && record[0].text.is_empty() && !record[0].quoted;
-    if !blank {
-        records.push(record);
-    }
+    parse_records(text, delimiter)
 }
 
 /// Builds a one-sheet project from delimited text.
@@ -129,31 +70,22 @@ pub fn write(sheet: &Sheet, delimiter: char) -> String {
     else {
         return String::new();
     };
-    let mut output = String::new();
+    let mut rows = Vec::new();
     for row in 1..=bounds.end_row {
         let mut cells = Vec::new();
         for column in 1..=bounds.end_column {
             // Delimited text has no formula channel, so a formula projects its
             // freshly evaluated value.
-            cells.push(escape(
-                &sheet.cell(row, column).map(|cell| crate::eval::value_of(cell).display_text()).unwrap_or_default(),
-                delimiter,
-            ));
+            cells.push(sheet.cell(row, column).map(|cell| crate::eval::value_of(cell).display_text()).unwrap_or_default());
         }
-        output.push_str(&cells.join(&delimiter.to_string()));
-        output.push('\n');
+        rows.push(cells);
     }
-    output
+    write_records(&rows, delimiter)
 }
 
 /// Quotes a field when it contains the delimiter, a quote or a line break.
 pub fn escape(text: &str, delimiter: char) -> String {
-    if text.contains(delimiter) || text.contains('"') || text.contains('\n') || text.contains('\r') {
-        format!("\"{}\"", text.replace('"', "\"\""))
-    }
-    else {
-        text.to_owned()
-    }
+    escape_field(text, delimiter)
 }
 
 #[cfg(test)]
