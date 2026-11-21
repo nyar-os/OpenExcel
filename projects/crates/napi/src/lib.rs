@@ -315,7 +315,7 @@ impl IpcHandler for WorkbookIpcHandler {
             "workbook.find" => {
                 let request = value.get("request").cloned().unwrap_or(Value::Null);
                 match call_find(handle_of(&value), &request) {
-                    Ok(hits) => reply(id, "findResult", json!({ "hits": hits })),
+                    Ok(result) => reply(id, "findResult", result),
                     Err(message) => failure(id, "findError", message),
                 }
             }

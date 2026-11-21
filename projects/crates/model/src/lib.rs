@@ -12,6 +12,7 @@ mod error;
 mod eval;
 mod inspect;
 mod model;
+mod pdf;
 mod reference;
 mod render;
 mod store;
@@ -83,7 +84,11 @@ pub fn capabilities() -> Value {
             "tsv": "supported",
             "json": "supported",
             "html": "supported",
-            "pdf": "unsupported",
+            "pdf": "partial",
+        },
+        // `partial` targets list what their projection approximates or drops.
+        "exportLimits": {
+            "pdf": ["style-approximated", "no-images"],
         },
     })
 }
@@ -215,12 +220,28 @@ pub fn export(handle: u64, format: &str, target: &Path, overwrite: bool) -> Resu
             false,
         ),
         "html" => (html_projection(&project).into_bytes(), skipped_sheets(&project, "export.html.sheet-skipped"), false),
+        "pdf" => (
+            pdf::write(&project),
+            vec![
+                json!({
+                    "code": "export.pdf.style-approximated",
+                    "severity": "warning",
+                    "message": "the PDF projection approximates column widths, fonts and fills",
+                }),
+                json!({
+                    "code": "export.pdf.no-images",
+                    "severity": "warning",
+                    "message": "the project model carries no images, so the PDF has none",
+                }),
+            ],
+            false,
+        ),
         "xlsx" => {
             let bytes = xlsx::write_package(&project)?;
             verify_xlsx(&project, &bytes)?;
             (bytes, Vec::new(), true)
         }
-        "xlsm" | "pdf" => return Err(ServiceError::unsupported(&format)),
+        "xlsm" => return Err(ServiceError::unsupported(&format)),
         other => return Err(ServiceError::new("format/unsupported", format!("`{other}` is not an export target"))),
     };
     write_file(target, &bytes, overwrite)?;
@@ -348,7 +369,7 @@ pub fn range(handle: u64, request: &Value) -> Result<Value, ServiceError> {
 /// Searches evaluated values and formula sources of one open workbook.
 ///
 /// Returns at most [`MAX_FIND_HITS`] hits with character offsets into the
-/// matched field.
+/// matched field, plus `truncated` when the cap was reached.
 pub fn find(handle: u64, request: &Value) -> Result<Value, ServiceError> {
     store::with(handle, |entry| -> Result<Value, ServiceError> {
         let query = request
@@ -405,7 +426,7 @@ pub fn find(handle: u64, request: &Value) -> Result<Value, ServiceError> {
                 }
             }
         }
-        Ok(Value::Array(hits))
+        Ok(json!({ "hits": hits, "truncated": hits.len() >= MAX_FIND_HITS }))
     })?
 }
 
@@ -721,6 +742,62 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<usize, Se
             sheet.clear_range(&range);
             0
         }
+        "range.sort" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let range = operation
+                .get("range")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`range.sort` needs an A1 range such as `A1:C4`"))?;
+            if !range.is_valid() || range.end_row > 1_048_576 || range.end_column > 16_384 {
+                return Err(ServiceError::argument(format!("sort range `{}` leaves the sheet grid", range.reference())));
+            }
+            let column = sort_column(operation, &range)?;
+            let ascending = operation.get("ascending").and_then(Value::as_bool).unwrap_or(true);
+            let has_header = operation.get("hasHeader").and_then(Value::as_bool).unwrap_or(false);
+            // Formula keys sort by the value a reader sees, not a stale cache.
+            eval::recalculate(project);
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            if let Some(merged) = sheet.merged.iter().find(|merged| merged.overlaps(&range)) {
+                return Err(ServiceError::argument(format!(
+                    "`range.sort` cannot move rows through merged range `{}`",
+                    merged.reference()
+                )));
+            }
+            let first_row = range.start_row + u32::from(has_header);
+            if first_row <= range.end_row {
+                let mut records = Vec::new();
+                for row in first_row..=range.end_row {
+                    let sort_value = sheet.cell(row, column).map(eval::value_of).unwrap_or(CellValue::Empty);
+                    let cells = (range.start_column..=range.end_column)
+                        .map(|column| sheet.cell(row, column).cloned())
+                        .collect::<Vec<_>>();
+                    records.push((sort_value, cells));
+                }
+                records.sort_by(|left, right| compare_sort_values(&left.0, &right.0, ascending));
+                let body = CellRange {
+                    start_row: first_row,
+                    end_row: range.end_row,
+                    start_column: range.start_column,
+                    end_column: range.end_column,
+                };
+                sheet.clear_range(&body);
+                for (offset, (_, cells)) in records.into_iter().enumerate() {
+                    let row = first_row + offset as u32;
+                    for (column_offset, cell) in cells.into_iter().enumerate() {
+                        let Some(mut cell) = cell
+                        else {
+                            continue;
+                        };
+                        cell.row = row;
+                        cell.column = range.start_column + column_offset as u32;
+                        cell.reference = reference::format_reference(cell.row, cell.column);
+                        sheet.set_cell(cell);
+                    }
+                }
+            }
+            0
+        }
         "range.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
@@ -912,6 +989,70 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<usize, Se
         other => return Err(ServiceError::new("object/unsupported", format!("edit operation `{other}` is not supported"))),
     };
     Ok(replacements)
+}
+
+/// Resolves the `column` of a `range.sort` request.
+///
+/// A number is a one-based offset inside the range; a letter is the absolute
+/// sheet column. Either form must land inside the sorted range.
+fn sort_column(operation: &Value, range: &CellRange) -> Result<u32, ServiceError> {
+    let column = match operation.get("column") {
+        Some(Value::Number(number)) => {
+            let offset = number
+                .as_u64()
+                .filter(|offset| *offset >= 1)
+                .ok_or_else(|| ServiceError::argument("the `column` offset must be a positive integer"))?;
+            let offset = u32::try_from(offset).map_err(|_| ServiceError::argument("the `column` offset is too large"))?;
+            range
+                .start_column
+                .checked_add(offset - 1)
+                .ok_or_else(|| ServiceError::argument("the `column` offset leaves the sheet grid"))?
+        }
+        Some(Value::String(text)) => reference::column_number(text.trim())
+            .ok_or_else(|| ServiceError::argument(format!("`{text}` is not a column letter such as `B`")))?,
+        Some(_) => return Err(ServiceError::argument("`range.sort` needs a numeric or letter `column`")),
+        None => return Err(ServiceError::argument("`range.sort` needs a `column`")),
+    };
+    if !range.contains(range.start_row, column) {
+        return Err(ServiceError::argument(format!(
+            "sort column `{}` is outside the range `{}`",
+            reference::column_name(column),
+            range.reference()
+        )));
+    }
+    Ok(column)
+}
+
+/// Orders two sort keys; blanks always trail, everything else follows the
+/// number < text < boolean < error ranking and flips with `ascending`.
+fn compare_sort_values(left: &CellValue, right: &CellValue, ascending: bool) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (left.is_empty(), right.is_empty()) {
+        (true, true) => return Ordering::Equal,
+        (true, false) => return Ordering::Greater,
+        (false, true) => return Ordering::Less,
+        _ => {}
+    }
+    let ordering = match (left, right) {
+        (CellValue::Number { number: left }, CellValue::Number { number: right }) => {
+            left.partial_cmp(right).unwrap_or(Ordering::Equal)
+        }
+        (CellValue::Number { .. }, _) => Ordering::Less,
+        (_, CellValue::Number { .. }) => Ordering::Greater,
+        (CellValue::Text { text: left }, CellValue::Text { text: right }) => {
+            left.to_lowercase().cmp(&right.to_lowercase()).then_with(|| left.cmp(right))
+        }
+        (CellValue::Text { .. }, _) => Ordering::Less,
+        (_, CellValue::Text { .. }) => Ordering::Greater,
+        (CellValue::Bool { value: left }, CellValue::Bool { value: right }) => left.cmp(right),
+        (CellValue::Bool { .. }, _) => Ordering::Less,
+        (_, CellValue::Bool { .. }) => Ordering::Greater,
+        (CellValue::Error { code: left }, CellValue::Error { code: right }) => left.cmp(right),
+        (CellValue::Error { .. }, _) => Ordering::Less,
+        (_, CellValue::Error { .. }) => Ordering::Greater,
+        (CellValue::Empty, CellValue::Empty) => Ordering::Equal,
+    };
+    if ascending { ordering } else { ordering.reverse() }
 }
 
 /// Replaces every non-overlapping occurrence and reports how many it replaced.
