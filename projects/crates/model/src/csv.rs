@@ -102,6 +102,7 @@ pub fn project_from_csv(title: impl Into<String>, text: &str, delimiter: char) -
                 cached: None,
                 style: None,
                 computed: None,
+                computed_state: None,
             });
         }
     }

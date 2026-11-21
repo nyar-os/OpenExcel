@@ -15,7 +15,7 @@ use std::{
 };
 
 use crate::{
-    model::{Cell, CellRange, CellValue, Project},
+    model::{Cell, CellRange, CellValue, ComputedState, Project},
     reference::parse_reference,
 };
 
@@ -27,8 +27,43 @@ const VALUE: &str = "#VALUE!";
 const REF: &str = "#REF!";
 /// Error code of an unknown function or name.
 const NAME: &str = "#NAME?";
+/// Error code of a lookup that found no match.
+const NA: &str = "#N/A";
 /// Error code of a formula that depends on itself, directly or through others.
 const CYCLE: &str = "#CYCLE!";
+
+/// Functions this engine evaluates, sorted for a stable capability list.
+pub(crate) const FUNCTIONS: &[&str] = &[
+    "ABS",
+    "AND",
+    "AVERAGE",
+    "CONCAT",
+    "COUNT",
+    "COUNTA",
+    "IF",
+    "IFERROR",
+    "INDEX",
+    "INT",
+    "LEFT",
+    "LEN",
+    "LOWER",
+    "MATCH",
+    "MAX",
+    "MID",
+    "MIN",
+    "NOT",
+    "OR",
+    "RIGHT",
+    "ROUND",
+    "ROUNDDOWN",
+    "ROUNDUP",
+    "SUBSTITUTE",
+    "SUM",
+    "TEXTJOIN",
+    "TRIM",
+    "UPPER",
+    "VLOOKUP",
+];
 
 const MAX_ROW: u32 = 1_048_576;
 const MAX_COLUMN: u32 = 16_384;
@@ -665,9 +700,25 @@ fn compare(left: &CellValue, right: &CellValue) -> Result<Ordering, CellValue> {
 /// One evaluated function argument.
 enum Argument {
     Value(CellValue),
-    Grid(Vec<CellValue>),
+    Grid(Grid),
     /// Resolution failed before any cell could be read.
     Invalid(CellValue),
+}
+
+/// A rectangular range flattened row by row, together with its shape.
+struct Grid {
+    values: Vec<CellValue>,
+    rows: u32,
+    columns: u32,
+}
+
+impl Grid {
+    fn value(&self, row: u32, column: u32) -> Option<&CellValue> {
+        if row == 0 || column == 0 || row > self.rows || column > self.columns {
+            return None;
+        }
+        self.values.get(((row - 1) * self.columns + (column - 1)) as usize)
+    }
 }
 
 struct Evaluator<'a> {
@@ -676,9 +727,19 @@ struct Evaluator<'a> {
     values: HashMap<CellKey, CellValue>,
     states: HashMap<CellKey, u8>,
     stack: Vec<CellKey>,
+    /// Cells whose formula used a function or construct the engine does not
+    /// evaluate. Their imported cached value stays the effective value.
+    unsupported: HashSet<CellKey>,
 }
 
 impl Evaluator<'_> {
+    /// Marks the formula cell currently being evaluated as unsupported.
+    fn mark_unsupported(&mut self) {
+        if let Some(key) = self.stack.last().copied() {
+            self.unsupported.insert(key);
+        }
+    }
+
     fn resolve_sheet(&self, sheet: Option<&str>, current: usize) -> Option<usize> {
         match sheet {
             None => Some(current),
@@ -722,9 +783,23 @@ impl Evaluator<'_> {
         self.states.insert(key, 1);
         self.stack.push(key);
         let form = self.forms.get(&key).cloned().flatten();
-        let value = match form {
+        let evaluated = match form {
             Some(expression) => self.eval(&expression, sheet),
             None => error(VALUE),
+        };
+        // An unsupported formula keeps the value the source writer cached, so
+        // opening and re-exporting a valid workbook never replaces a real
+        // result with `#NAME?`.
+        let value = if self.unsupported.contains(&key) {
+            self.project
+                .sheets
+                .get(sheet)
+                .and_then(|target| target.cell(row, column))
+                .and_then(|cell| cell.cached.clone())
+                .unwrap_or_else(|| error(NAME))
+        }
+        else {
+            evaluated
         };
         self.stack.pop();
         if self.states.get(&key).copied() == Some(1) {
@@ -734,7 +809,7 @@ impl Evaluator<'_> {
         value
     }
 
-    fn grid(&mut self, sheet: Option<&str>, range: &CellRange, current: usize) -> Result<Vec<CellValue>, CellValue> {
+    fn grid(&mut self, sheet: Option<&str>, range: &CellRange, current: usize) -> Result<Grid, CellValue> {
         let Some(index) = self.resolve_sheet(sheet, current)
         else {
             return Err(error(REF));
@@ -752,7 +827,7 @@ impl Evaluator<'_> {
                 values.push(self.cell_value(index, row, column));
             }
         }
-        Ok(values)
+        Ok(Grid { values, rows: range.rows(), columns: range.columns() })
     }
 
     fn eval(&mut self, expression: &Expr, current: usize) -> CellValue {
@@ -762,7 +837,10 @@ impl Evaluator<'_> {
             Expr::Bool(value) => CellValue::boolean(*value),
             Expr::Error(code) => error(code),
             Expr::Empty => CellValue::Empty,
-            Expr::Name(_) => error(NAME),
+            Expr::Name(_) => {
+                self.mark_unsupported();
+                error(NAME)
+            }
             Expr::Cell { sheet, row, column } => {
                 let Some(index) = self.resolve_sheet(sheet.as_deref(), current)
                 else {
@@ -770,7 +848,13 @@ impl Evaluator<'_> {
                 };
                 self.cell_value(index, *row, *column)
             }
-            Expr::Range { .. } => error(VALUE),
+            Expr::Range { .. } => {
+                // A range used as one scalar is an array formula or an
+                // unimplemented construct. Keep the imported cache instead of
+                // replacing it with `#VALUE!`.
+                self.mark_unsupported();
+                error(VALUE)
+            }
             Expr::Negate(inner) => match numeric(&self.eval(inner, current)) {
                 Ok(number) => CellValue::number(normalize_zero(-number)),
                 Err(error) => error,
@@ -844,14 +928,23 @@ impl Evaluator<'_> {
     }
 
     fn call(&mut self, name: &str, args: &[Expr], current: usize) -> CellValue {
-        if name == "IF" {
-            return self.function_if(args, current);
+        if !FUNCTIONS.contains(&name) {
+            // The engine does not know this function. Mark the cell so the
+            // imported cached value survives instead of `#NAME?`.
+            self.mark_unsupported();
+            return error(NAME);
+        }
+        match name {
+            "IF" => return self.function_if(args, current),
+            "IFERROR" => return self.function_iferror(args, current),
+            "AND" | "OR" => return self.function_logical(name == "AND", args, current),
+            _ => {}
         }
         let mut arguments = Vec::with_capacity(args.len());
         for argument in args {
             arguments.push(match argument {
                 Expr::Range { sheet, range } => match self.grid(sheet.as_deref(), range, current) {
-                    Ok(values) => Argument::Grid(values),
+                    Ok(grid) => Argument::Grid(grid),
                     Err(error) => Argument::Invalid(error),
                 },
                 _ => Argument::Value(self.eval(argument, current)),
@@ -879,12 +972,63 @@ impl Evaluator<'_> {
             _ => CellValue::boolean(false),
         }
     }
+
+    /// `IFERROR(value, fallback)` evaluates the fallback only for an error.
+    fn function_iferror(&mut self, args: &[Expr], current: usize) -> CellValue {
+        if args.len() != 2 {
+            return error(VALUE);
+        }
+        let value = self.eval(&args[0], current);
+        if matches!(value, CellValue::Error { .. }) { self.eval(&args[1], current) } else { value }
+    }
+
+    /// `AND`/`OR` over scalars and range members, short-circuiting on the
+    /// deciding value. Text inside a range is ignored, matching a spreadsheet.
+    fn function_logical(&mut self, and: bool, args: &[Expr], current: usize) -> CellValue {
+        if args.is_empty() {
+            return error(VALUE);
+        }
+        for argument in args {
+            match argument {
+                Expr::Range { sheet, range } => match self.grid(sheet.as_deref(), range, current) {
+                    Ok(grid) => {
+                        for value in &grid.values {
+                            let truth = match value {
+                                CellValue::Bool { value } => Some(*value),
+                                CellValue::Number { number } => Some(*number != 0.0),
+                                CellValue::Error { .. } => return value.clone(),
+                                _ => None,
+                            };
+                            if let Some(truth) = truth
+                                && truth != and
+                            {
+                                return CellValue::boolean(!and);
+                            }
+                        }
+                    }
+                    Err(error) => return error,
+                },
+                _ => {
+                    let value = self.eval(argument, current);
+                    match truthy(&value) {
+                        Ok(truth) => {
+                            if truth != and {
+                                return CellValue::boolean(!and);
+                            }
+                        }
+                        Err(error) => return error,
+                    }
+                }
+            }
+        }
+        CellValue::boolean(and)
+    }
 }
 
 fn scalar(args: &[Argument], index: usize) -> Option<CellValue> {
     match args.get(index)? {
         Argument::Value(value) => Some(value.clone()),
-        Argument::Grid(items) => items.first().cloned(),
+        Argument::Grid(grid) => grid.values.first().cloned(),
         Argument::Invalid(value) => Some(value.clone()),
     }
 }
@@ -893,8 +1037,8 @@ fn numbers(args: &[Argument]) -> Result<Vec<f64>, CellValue> {
     let mut values = Vec::new();
     for argument in args {
         match argument {
-            Argument::Grid(items) => {
-                for item in items {
+            Argument::Grid(grid) => {
+                for item in &grid.values {
                     match item {
                         CellValue::Number { number } => values.push(*number),
                         CellValue::Error { .. } => return Err(item.clone()),
@@ -920,7 +1064,7 @@ fn count_numbers(args: &[Argument]) -> usize {
     for argument in args {
         match argument {
             Argument::Value(CellValue::Number { .. }) => count += 1,
-            Argument::Grid(items) => count += items.iter().filter(|item| matches!(item, CellValue::Number { .. })).count(),
+            Argument::Grid(grid) => count += grid.values.iter().filter(|item| matches!(item, CellValue::Number { .. })).count(),
             _ => {}
         }
     }
@@ -936,7 +1080,7 @@ fn count_non_empty(args: &[Argument]) -> usize {
                     count += 1;
                 }
             }
-            Argument::Grid(items) => count += items.iter().filter(|item| !item.is_empty()).count(),
+            Argument::Grid(grid) => count += grid.values.iter().filter(|item| !item.is_empty()).count(),
             Argument::Invalid(_) => {}
         }
     }
@@ -989,6 +1133,351 @@ fn trim_text(text: &str) -> String {
         }
     }
     result
+}
+
+fn text_argument(args: &[Argument], index: usize) -> Result<String, CellValue> {
+    match scalar(args, index) {
+        Some(value) => as_text(&value),
+        None => Err(error(VALUE)),
+    }
+}
+
+fn number_argument(args: &[Argument], index: usize) -> Result<f64, CellValue> {
+    match scalar(args, index) {
+        Some(value) => numeric(&value),
+        None => Err(error(VALUE)),
+    }
+}
+
+fn integer_argument(args: &[Argument], index: usize) -> Result<i64, CellValue> {
+    number_argument(args, index).map(|number| number.trunc() as i64)
+}
+
+fn grid_argument(args: &[Argument], index: usize) -> Option<&Grid> {
+    match args.get(index)? {
+        Argument::Grid(grid) => Some(grid),
+        _ => None,
+    }
+}
+
+/// Counts one `num_chars` argument, rejecting negative widths.
+fn character_count(number: f64) -> Result<usize, CellValue> {
+    if number < 0.0 {
+        return Err(error(VALUE));
+    }
+    Ok(number.trunc() as usize)
+}
+
+fn round_toward(number: f64, digits: f64, up: bool) -> f64 {
+    let digits = digits.clamp(-15.0, 15.0) as i32;
+    let factor = 10f64.powi(digits);
+    let scaled = number * factor;
+    let magnitude = scaled.abs();
+    let rounded = if up { magnitude.ceil() } else { magnitude.floor() };
+    normalize_zero(if scaled < 0.0 { -rounded / factor } else { rounded / factor })
+}
+
+/// Replaces the nth occurrence of a needle, leaving every other one intact.
+fn replace_nth(text: &str, needle: &str, replacement: &str, instance: usize) -> String {
+    let mut output = String::new();
+    let mut last = 0usize;
+    let mut count = 0usize;
+    for (index, _) in text.match_indices(needle) {
+        count += 1;
+        if count == instance {
+            output.push_str(&text[last..index]);
+            output.push_str(replacement);
+            last = index + needle.len();
+        }
+    }
+    output.push_str(&text[last..]);
+    output
+}
+
+fn function_vlookup(args: &[Argument]) -> CellValue {
+    if !(3..=4).contains(&args.len()) {
+        return error(VALUE);
+    }
+    let Some(grid) = grid_argument(args, 1)
+    else {
+        return error(VALUE);
+    };
+    let Some(lookup) = scalar(args, 0)
+    else {
+        return error(VALUE);
+    };
+    let column = match integer_argument(args, 2) {
+        Ok(column) => column,
+        Err(error) => return error,
+    };
+    if column < 1 {
+        return error(VALUE);
+    }
+    if column as u32 > grid.columns {
+        return error(REF);
+    }
+    let approximate = if args.len() == 4 {
+        match scalar(args, 3).map(|value| truthy(&value)) {
+            Some(Ok(approximate)) => approximate,
+            Some(Err(error)) => return error,
+            None => true,
+        }
+    }
+    else {
+        true
+    };
+    let mut found: Option<u32> = None;
+    for row in 1..=grid.rows {
+        let key = grid.value(row, 1).cloned().unwrap_or(CellValue::Empty);
+        let ordering = match compare(&key, &lookup) {
+            Ok(ordering) => ordering,
+            Err(error) => return error,
+        };
+        if ordering == Ordering::Equal {
+            found = Some(row);
+            break;
+        }
+        if approximate {
+            if ordering == Ordering::Less {
+                found = Some(row);
+            }
+            else {
+                break;
+            }
+        }
+    }
+    let Some(row) = found
+    else {
+        return error(NA);
+    };
+    grid.value(row, column as u32).cloned().unwrap_or(CellValue::Empty)
+}
+
+fn function_index(args: &[Argument]) -> CellValue {
+    if !(2..=3).contains(&args.len()) {
+        return error(VALUE);
+    }
+    let Some(grid) = grid_argument(args, 0)
+    else {
+        return error(VALUE);
+    };
+    let row = match integer_argument(args, 1) {
+        Ok(row) => row,
+        Err(error) => return error,
+    };
+    let column = if args.len() == 3 {
+        match integer_argument(args, 2) {
+            Ok(column) => column,
+            Err(error) => return error,
+        }
+    }
+    else {
+        1
+    };
+    if row < 1 || column < 1 {
+        return error(VALUE);
+    }
+    let (row, column) = (row as u32, column as u32);
+    if row > grid.rows || column > grid.columns {
+        return error(REF);
+    }
+    grid.value(row, column).cloned().unwrap_or(CellValue::Empty)
+}
+
+fn function_match(args: &[Argument]) -> CellValue {
+    if !(2..=3).contains(&args.len()) {
+        return error(VALUE);
+    }
+    let Some(lookup) = scalar(args, 0)
+    else {
+        return error(VALUE);
+    };
+    let Some(grid) = grid_argument(args, 1)
+    else {
+        return error(VALUE);
+    };
+    let match_type = if args.len() == 3 {
+        match integer_argument(args, 2) {
+            Ok(match_type) => match_type,
+            Err(error) => return error,
+        }
+    }
+    else {
+        1
+    };
+    if !matches!(match_type, -1 | 0 | 1) {
+        return error(VALUE);
+    }
+    let mut found: Option<u32> = None;
+    for (index, value) in grid.values.iter().enumerate() {
+        let ordering = match compare(value, &lookup) {
+            Ok(ordering) => ordering,
+            Err(error) => return error,
+        };
+        if match_type == 0 {
+            if ordering == Ordering::Equal {
+                return CellValue::number(index as f64 + 1.0);
+            }
+            continue;
+        }
+        if match_type == 1 {
+            if ordering == Ordering::Greater {
+                break;
+            }
+            found = Some(index as u32 + 1);
+        }
+        else {
+            if ordering == Ordering::Less {
+                break;
+            }
+            found = Some(index as u32 + 1);
+        }
+    }
+    match found {
+        Some(position) => CellValue::number(f64::from(position)),
+        None => error(NA),
+    }
+}
+
+fn function_textjoin(args: &[Argument]) -> CellValue {
+    if args.len() < 3 {
+        return error(VALUE);
+    }
+    let delimiter = match text_argument(args, 0) {
+        Ok(delimiter) => delimiter,
+        Err(error) => return error,
+    };
+    let ignore_empty = match scalar(args, 1).map(|value| truthy(&value)) {
+        Some(Ok(ignore_empty)) => ignore_empty,
+        Some(Err(error)) => return error,
+        None => return error(VALUE),
+    };
+    let mut parts = Vec::new();
+    for argument in &args[2..] {
+        match argument {
+            Argument::Value(value) => {
+                let text = match as_text(value) {
+                    Ok(text) => text,
+                    Err(error) => return error,
+                };
+                if !(ignore_empty && text.is_empty()) {
+                    parts.push(text);
+                }
+            }
+            Argument::Grid(grid) => {
+                for value in &grid.values {
+                    let text = match as_text(value) {
+                        Ok(text) => text,
+                        Err(error) => return error,
+                    };
+                    if !(ignore_empty && text.is_empty()) {
+                        parts.push(text);
+                    }
+                }
+            }
+            Argument::Invalid(value) => return value.clone(),
+        }
+    }
+    CellValue::text(parts.join(&delimiter))
+}
+
+fn function_substitute(args: &[Argument]) -> CellValue {
+    if !(3..=4).contains(&args.len()) {
+        return error(VALUE);
+    }
+    let text = match text_argument(args, 0) {
+        Ok(text) => text,
+        Err(error) => return error,
+    };
+    let old = match text_argument(args, 1) {
+        Ok(old) => old,
+        Err(error) => return error,
+    };
+    let new = match text_argument(args, 2) {
+        Ok(new) => new,
+        Err(error) => return error,
+    };
+    if old.is_empty() {
+        return CellValue::text(text);
+    }
+    if args.len() == 4 {
+        let instance = match integer_argument(args, 3) {
+            Ok(instance) => instance,
+            Err(error) => return error,
+        };
+        if instance < 1 {
+            return error(VALUE);
+        }
+        CellValue::text(replace_nth(&text, &old, &new, instance as usize))
+    }
+    else {
+        CellValue::text(text.replace(&old, &new))
+    }
+}
+
+fn function_left(args: &[Argument]) -> CellValue {
+    if !(1..=2).contains(&args.len()) {
+        return error(VALUE);
+    }
+    let text = match text_argument(args, 0) {
+        Ok(text) => text,
+        Err(error) => return error,
+    };
+    let count = if args.len() == 2 {
+        match number_argument(args, 1).and_then(character_count) {
+            Ok(count) => count,
+            Err(error) => return error,
+        }
+    }
+    else {
+        1
+    };
+    CellValue::text(text.chars().take(count).collect::<String>())
+}
+
+fn function_right(args: &[Argument]) -> CellValue {
+    if !(1..=2).contains(&args.len()) {
+        return error(VALUE);
+    }
+    let text = match text_argument(args, 0) {
+        Ok(text) => text,
+        Err(error) => return error,
+    };
+    let count = if args.len() == 2 {
+        match number_argument(args, 1).and_then(character_count) {
+            Ok(count) => count,
+            Err(error) => return error,
+        }
+    }
+    else {
+        1
+    };
+    let characters: Vec<char> = text.chars().collect();
+    let start = characters.len().saturating_sub(count);
+    CellValue::text(characters[start..].iter().collect::<String>())
+}
+
+fn function_mid(args: &[Argument]) -> CellValue {
+    if args.len() != 3 {
+        return error(VALUE);
+    }
+    let text = match text_argument(args, 0) {
+        Ok(text) => text,
+        Err(error) => return error,
+    };
+    let start = match number_argument(args, 1) {
+        Ok(start) => start,
+        Err(error) => return error,
+    };
+    if start < 1.0 {
+        return error(VALUE);
+    }
+    let count = match number_argument(args, 2).and_then(character_count) {
+        Ok(count) => count,
+        Err(error) => return error,
+    };
+    let start = start.trunc() as usize - 1;
+    CellValue::text(text.chars().skip(start).take(count).collect::<String>())
 }
 
 fn apply_function(name: &str, args: &[Argument]) -> CellValue {
@@ -1049,8 +1538,8 @@ fn apply_function(name: &str, args: &[Argument]) -> CellValue {
                         Ok(text) => output.push_str(&text),
                         Err(error) => return error,
                     },
-                    Argument::Grid(items) => {
-                        for item in items {
+                    Argument::Grid(grid) => {
+                        for item in &grid.values {
                             match as_text(item) {
                                 Ok(text) => output.push_str(&text),
                                 Err(error) => return error,
@@ -1090,6 +1579,33 @@ fn apply_function(name: &str, args: &[Argument]) -> CellValue {
                 None => error(VALUE),
             }
         }
+        "VLOOKUP" => function_vlookup(args),
+        "INDEX" => function_index(args),
+        "MATCH" => function_match(args),
+        "LEFT" => function_left(args),
+        "RIGHT" => function_right(args),
+        "MID" => function_mid(args),
+        "SUBSTITUTE" => function_substitute(args),
+        "TEXTJOIN" => function_textjoin(args),
+        "INT" => match single_number(args) {
+            Ok(number) => CellValue::number(normalize_zero(number.floor())),
+            Err(error) => error,
+        },
+        "ROUNDUP" | "ROUNDDOWN" => {
+            if args.len() != 2 {
+                return error(VALUE);
+            }
+            let number = match number_argument(args, 0) {
+                Ok(number) => number,
+                Err(error) => return error,
+            };
+            let digits = match number_argument(args, 1) {
+                Ok(digits) => digits,
+                Err(error) => return error,
+            };
+            CellValue::number(round_toward(number, digits, name == "ROUNDUP"))
+        }
+        "IFERROR" | "AND" | "OR" => error(VALUE),
         _ => error(NAME),
     }
 }
@@ -1130,27 +1646,38 @@ pub(crate) fn recalculate(project: &mut Project) -> usize {
     let forms = collect_forms(project);
     let mut keys: Vec<CellKey> = forms.keys().copied().collect();
     keys.sort_unstable();
-    let values = {
-        let mut evaluator = Evaluator { project, forms, values: HashMap::new(), states: HashMap::new(), stack: Vec::new() };
+    let (values, unsupported) = {
+        let mut evaluator = Evaluator {
+            project,
+            forms,
+            values: HashMap::new(),
+            states: HashMap::new(),
+            stack: Vec::new(),
+            unsupported: HashSet::new(),
+        };
         for (sheet, row, column) in keys {
             evaluator.eval_cell(sheet, row, column);
         }
-        std::mem::take(&mut evaluator.values)
+        (std::mem::take(&mut evaluator.values), std::mem::take(&mut evaluator.unsupported))
     };
 
     let mut changed = 0usize;
     for (sheet_index, sheet) in project.sheets.iter_mut().enumerate() {
         for cell in &mut sheet.cells {
-            let next = if cell.formula.is_some() {
-                Some(values.get(&(sheet_index, cell.row, cell.column)).cloned().unwrap_or_else(|| error(VALUE)))
+            let key = (sheet_index, cell.row, cell.column);
+            let (next, state) = if cell.formula.is_some() {
+                let value = values.get(&key).cloned().unwrap_or_else(|| error(VALUE));
+                let state = if unsupported.contains(&key) { ComputedState::Unsupported } else { ComputedState::Computed };
+                (Some(value), Some(state))
             }
             else {
-                None
+                (None, None)
             };
             if cell.computed != next {
                 changed += 1;
                 cell.computed = next;
             }
+            cell.computed_state = state;
         }
     }
     changed
@@ -1278,7 +1805,7 @@ pub(crate) fn find_cycles(project: &Project) -> Vec<Vec<CellKey>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CellValue, Project};
+    use crate::model::{CellValue, ComputedState, Project};
 
     fn project_with(cells: &[(&str, CellValue)]) -> Project {
         let mut project = Project::blank("Eval");
@@ -1403,5 +1930,83 @@ mod tests {
         assert_eq!(recalculate(&mut project), 2);
         assert_eq!(project.sheets[0].cell(1, 3).unwrap().computed, Some(CellValue::number(7.0)));
         assert_eq!(recalculate(&mut project), 0);
+    }
+
+    fn lookup_project() -> Project {
+        let mut project = Project::blank("Lookup");
+        for (row, key, label, amount, descending) in
+            [(1, 1.0, "one", 10.0, 30.0), (2, 2.0, "two", 20.0, 20.0), (3, 3.0, "three", 30.0, 10.0)]
+        {
+            project.sheets[0].write_cell(row, 1, CellValue::number(key), None, None);
+            project.sheets[0].write_cell(row, 2, CellValue::text(label), None, None);
+            project.sheets[0].write_cell(row, 3, CellValue::number(amount), None, None);
+            project.sheets[0].write_cell(row, 4, CellValue::number(descending), None, None);
+        }
+        project
+    }
+
+    #[test]
+    fn lookup_functions_cover_exact_and_approximate_matches() {
+        let mut project = lookup_project();
+        assert_eq!(evaluate(&mut project, "=VLOOKUP(2,A1:C3,2,FALSE)"), CellValue::text("two"));
+        assert_eq!(evaluate(&mut project, "=VLOOKUP(2.5,A1:C3,3,TRUE)"), CellValue::number(20.0));
+        assert_eq!(evaluate(&mut project, "=VLOOKUP(2.5,A1:C3,3)"), CellValue::number(20.0));
+        assert_eq!(evaluate(&mut project, "=VLOOKUP(9,A1:C3,2,FALSE)"), error(NA));
+        assert_eq!(evaluate(&mut project, "=VLOOKUP(1,A1:C3,4)"), error(REF));
+        assert_eq!(evaluate(&mut project, "=INDEX(A1:C3,2,3)"), CellValue::number(20.0));
+        assert_eq!(evaluate(&mut project, "=INDEX(A1:C3,4,1)"), error(REF));
+        assert_eq!(evaluate(&mut project, "=MATCH(2,A1:A3,0)"), CellValue::number(2.0));
+        assert_eq!(evaluate(&mut project, "=MATCH(2.5,A1:A3,1)"), CellValue::number(2.0));
+        assert_eq!(evaluate(&mut project, "=MATCH(15,D1:D3,-1)"), CellValue::number(2.0));
+        assert_eq!(evaluate(&mut project, "=MATCH(9,A1:A3,0)"), error(NA));
+    }
+
+    #[test]
+    fn conditional_logical_and_text_functions_are_lazy() {
+        let mut project = lookup_project();
+        assert_eq!(evaluate(&mut project, "=IFERROR(1/0,\"safe\")"), CellValue::text("safe"));
+        assert_eq!(evaluate(&mut project, "=IFERROR(5,\"safe\")"), CellValue::number(5.0));
+        assert_eq!(evaluate(&mut project, "=IFERROR(1,1/0)"), CellValue::number(1.0));
+        assert_eq!(evaluate(&mut project, "=AND(TRUE,1)"), CellValue::boolean(true));
+        assert_eq!(evaluate(&mut project, "=AND(TRUE,0,1/0)"), CellValue::boolean(false));
+        assert_eq!(evaluate(&mut project, "=OR(FALSE,0,2)"), CellValue::boolean(true));
+        assert_eq!(evaluate(&mut project, "=OR(FALSE,0,1/0)"), error(DIV0));
+        assert_eq!(evaluate(&mut project, "=AND(A1:A3)"), CellValue::boolean(true));
+        assert_eq!(evaluate(&mut project, "=LEFT(\"hello\",2)"), CellValue::text("he"));
+        assert_eq!(evaluate(&mut project, "=RIGHT(\"hello\",3)"), CellValue::text("llo"));
+        assert_eq!(evaluate(&mut project, "=RIGHT(\"hello\")"), CellValue::text("o"));
+        assert_eq!(evaluate(&mut project, "=MID(\"hello\",2,3)"), CellValue::text("ell"));
+        assert_eq!(evaluate(&mut project, "=SUBSTITUTE(\"a-b-a\",\"a\",\"x\")"), CellValue::text("x-b-x"));
+        assert_eq!(evaluate(&mut project, "=SUBSTITUTE(\"a-b-a\",\"a\",\"x\",2)"), CellValue::text("a-b-x"));
+        assert_eq!(evaluate(&mut project, "=TEXTJOIN(\"-\",TRUE,A1:A2)"), CellValue::text("1-2"));
+        assert_eq!(evaluate(&mut project, "=INT(-1.5)"), CellValue::number(-2.0));
+        assert_eq!(evaluate(&mut project, "=ROUNDUP(2.1,0)"), CellValue::number(3.0));
+        assert_eq!(evaluate(&mut project, "=ROUNDDOWN(2.9,0)"), CellValue::number(2.0));
+        assert_eq!(evaluate(&mut project, "=ROUNDUP(-2.1,0)"), CellValue::number(-3.0));
+        assert_eq!(evaluate(&mut project, "=ROUNDDOWN(-2.9,0)"), CellValue::number(-2.0));
+        assert_eq!(evaluate(&mut project, "=ROUNDUP(2.9,-1)"), CellValue::number(10.0));
+    }
+
+    #[test]
+    fn unsupported_functions_keep_the_imported_cache() {
+        let mut project = Project::blank("Unsupported");
+        project.sheets[0].write_cell(1, 1, CellValue::number(2.0), None, None);
+        project.sheets[0].write_cell(1, 2, CellValue::Empty, Some("=FUTUREFN(A1)".to_owned()), Some(CellValue::number(7.0)));
+        project.sheets[0].write_cell(1, 3, CellValue::Empty, Some("=B1*2".to_owned()), None);
+        recalculate(&mut project);
+        let cell = project.sheets[0].cell(1, 2).expect("B1");
+        assert_eq!(cell.computed, Some(CellValue::number(7.0)));
+        assert_eq!(cell.computed_state, Some(ComputedState::Unsupported));
+        assert_eq!(project.sheets[0].cell(1, 3).expect("C1").computed, Some(CellValue::number(14.0)));
+    }
+
+    #[test]
+    fn functions_without_a_cache_still_report_name() {
+        let mut project = Project::blank("Missing");
+        project.sheets[0].write_cell(1, 1, CellValue::Empty, Some("=FUTUREFN(1)".to_owned()), None);
+        recalculate(&mut project);
+        let cell = project.sheets[0].cell(1, 1).expect("A1");
+        assert_eq!(cell.computed, Some(error(NAME)));
+        assert_eq!(cell.computed_state, Some(ComputedState::Unsupported));
     }
 }

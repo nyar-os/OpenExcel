@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use crate::{
     error::ServiceError,
-    model::{CellValue, Project, Sheet},
+    model::{CellValue, ComputedState, Project, Sheet},
     reference::parse_reference,
 };
 
@@ -125,6 +125,16 @@ fn check_formulas(project: &Project, issues: &mut Vec<Issue>) {
                 continue;
             };
             let trimmed = formula.trim();
+            if cell.computed_state == Some(ComputedState::Unsupported) {
+                issues.push(Issue::new(
+                    "formulas.unsupported-function",
+                    "warning",
+                    sheet,
+                    cell.reference.clone(),
+                    "formula uses a function this engine does not evaluate; the imported cached value is kept",
+                    false,
+                ));
+            }
             if !trimmed.starts_with('=') {
                 issues.push(Issue::new(
                     "inspect.formulas.missing-equals",
@@ -337,6 +347,11 @@ fn check_types(project: &Project, issues: &mut Vec<Issue>) {
                 ));
             }
             if cell.formula.is_some() {
+                if cell.computed_state == Some(ComputedState::Unsupported) {
+                    // The cached value stays the effective value, so an
+                    // unsupported formula is a warning, never an error.
+                    continue;
+                }
                 match &cell.computed {
                     Some(CellValue::Error { code }) => issues.push(Issue::new(
                         "inspect.types.error-value",

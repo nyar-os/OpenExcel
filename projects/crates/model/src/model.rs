@@ -198,8 +198,17 @@ impl Sheet {
 
     /// Writes a value and optional formula at a one-based row and column.
     pub fn write_cell(&mut self, row: u32, column: u32, value: CellValue, formula: Option<String>, cached: Option<CellValue>) {
-        let cell =
-            Cell { reference: format_reference(row, column), row, column, value, formula, cached, style: None, computed: None };
+        let cell = Cell {
+            reference: format_reference(row, column),
+            row,
+            column,
+            value,
+            formula,
+            cached,
+            style: None,
+            computed: None,
+            computed_state: None,
+        };
         self.set_cell(cell);
     }
 
@@ -323,6 +332,24 @@ pub struct Cell {
     /// Projects written before the evaluator existed simply omit the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub computed: Option<CellValue>,
+    /// How the most recent evaluation of `formula` ended.
+    ///
+    /// Non-formula cells omit the field, and projects written before it existed
+    /// simply omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub computed_state: Option<ComputedState>,
+}
+
+/// Outcome of evaluating one formula cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ComputedState {
+    /// The engine evaluated every function in the formula.
+    Computed,
+    /// The formula uses a function or construct this engine does not evaluate.
+    ///
+    /// The imported cached value, when present, stays the effective value.
+    Unsupported,
 }
 
 impl Cell {
