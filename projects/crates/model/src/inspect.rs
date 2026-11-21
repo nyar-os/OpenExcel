@@ -1,12 +1,10 @@
 //! Rule checks over the editable project model.
 
-use std::collections::{HashMap, HashSet};
-
 use serde_json::{Value, json};
 
 use crate::{
     error::ServiceError,
-    model::{Cell, CellValue, Project, Sheet},
+    model::{CellValue, Project, Sheet},
     reference::parse_reference,
 };
 
@@ -90,6 +88,12 @@ pub fn run(project: &Project, revision: u64, checks: Option<&[String]>) -> Resul
             selected
         }
     };
+
+    // Checks always run against freshly evaluated values, so `types`, `cycles`
+    // and `references` report what a reader would actually see.
+    let mut evaluated = project.clone();
+    crate::eval::recalculate(&mut evaluated);
+    let project = &evaluated;
 
     let mut issues = Vec::new();
     for check in requested {
@@ -199,6 +203,16 @@ fn check_formulas(project: &Project, issues: &mut Vec<Issue>) {
                     true,
                 ));
             }
+            if let Err(message) = crate::eval::validate(trimmed) {
+                issues.push(Issue::new(
+                    "inspect.formulas.syntax",
+                    "error",
+                    sheet,
+                    cell.reference.clone(),
+                    format!("formula cannot be parsed: {message}"),
+                    true,
+                ));
+            }
         }
     }
 }
@@ -213,6 +227,18 @@ struct ScannedReference {
 fn check_references(project: &Project, issues: &mut Vec<Issue>) {
     for sheet in &project.sheets {
         for cell in &sheet.cells {
+            if let Some(CellValue::Error { code }) = &cell.computed
+                && code == "#REF!"
+            {
+                issues.push(Issue::new(
+                    "inspect.references.unresolved",
+                    "error",
+                    sheet,
+                    cell.reference.clone(),
+                    "formula resolves to `#REF!`; a sheet or cell reference no longer exists",
+                    true,
+                ));
+            }
             let Some(formula) = &cell.formula
             else {
                 continue;
@@ -272,81 +298,29 @@ fn check_references(project: &Project, issues: &mut Vec<Issue>) {
 }
 
 fn check_cycles(project: &Project, issues: &mut Vec<Issue>) {
-    let mut nodes: HashMap<(usize, u32, u32), usize> = HashMap::new();
-    let mut cells: Vec<(usize, &Cell)> = Vec::new();
-    for (sheet_index, sheet) in project.sheets.iter().enumerate() {
-        for cell in &sheet.cells {
-            if cell.formula.is_some() {
-                nodes.insert((sheet_index, cell.row, cell.column), cells.len());
-                cells.push((sheet_index, cell));
-            }
-        }
+    for cycle in crate::eval::find_cycles(project) {
+        let Some((sheet_index, row, column)) = cycle.first().copied()
+        else {
+            continue;
+        };
+        let sheet = &project.sheets[sheet_index];
+        let address = crate::reference::format_reference(row, column);
+        let path = cycle
+            .iter()
+            .map(|(index, row, column)| {
+                format!("{}!{}", project.sheets[*index].name, crate::reference::format_reference(*row, *column))
+            })
+            .collect::<Vec<_>>()
+            .join(" -> ");
+        issues.push(Issue::new(
+            "inspect.cycles.cycle",
+            "error",
+            sheet,
+            address,
+            format!("formula cycle detected: {path}"),
+            true,
+        ));
     }
-
-    let mut edges: Vec<Vec<usize>> = vec![Vec::new(); cells.len()];
-    for (node, (sheet_index, cell)) in cells.iter().enumerate() {
-        for reference in scan_references(cell.formula.as_deref().unwrap_or_default()) {
-            let target_index = match &reference.sheet {
-                Some(name) => project.sheet_index(name),
-                None => Some(*sheet_index),
-            };
-            if let Some(target_index) = target_index
-                && let Some(target) = nodes.get(&(target_index, reference.row, reference.column))
-            {
-                edges[node].push(*target);
-            }
-        }
-    }
-    let mut colors = vec![0u8; cells.len()];
-    let mut stack = Vec::new();
-    let mut reported: HashSet<String> = HashSet::new();
-    for start in 0..cells.len() {
-        if colors[start] == 0 {
-            visit(start, &edges, &mut colors, &mut stack, &mut |cycle: &[usize]| {
-                let mut members: Vec<usize> = cycle.to_vec();
-                members.sort_unstable();
-                members.dedup();
-                let key = members.iter().map(usize::to_string).collect::<Vec<_>>().join(",");
-                if reported.insert(key) {
-                    let (sheet_index, cell) = cells[cycle[0]];
-                    let sheet = &project.sheets[sheet_index];
-                    let path = cycle
-                        .iter()
-                        .map(|node| {
-                            let (index, cell) = cells[*node];
-                            format!("{}!{}", project.sheets[index].name, cell.reference)
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" -> ");
-                    issues.push(Issue::new(
-                        "inspect.cycles.cycle",
-                        "error",
-                        sheet,
-                        cell.reference.clone(),
-                        format!("formula cycle detected: {path}"),
-                        true,
-                    ));
-                }
-            });
-        }
-    }
-}
-
-fn visit(node: usize, edges: &[Vec<usize>], colors: &mut [u8], stack: &mut Vec<usize>, report: &mut impl FnMut(&[usize])) {
-    colors[node] = 1;
-    stack.push(node);
-    for next in &edges[node] {
-        if colors[*next] == 0 {
-            visit(*next, edges, colors, stack, report);
-        }
-        else if colors[*next] == 1 {
-            let position = stack.iter().position(|candidate| candidate == next).unwrap_or(0);
-            let cycle = stack[position..].to_vec();
-            report(&cycle);
-        }
-    }
-    stack.pop();
-    colors[node] = 2;
 }
 
 fn check_types(project: &Project, issues: &mut Vec<Issue>) {
@@ -362,27 +336,26 @@ fn check_types(project: &Project, issues: &mut Vec<Issue>) {
                     true,
                 ));
             }
-            if let Some(CellValue::Error { code }) = &cell.cached
-                && !matches!(cell.value, CellValue::Error { .. })
-            {
-                issues.push(Issue::new(
-                    "inspect.types.error-value",
-                    "error",
-                    sheet,
-                    cell.reference.clone(),
-                    format!("formula result is the error value `{code}`"),
-                    true,
-                ));
-            }
-            if cell.formula.is_some() && cell.cached.is_none() && cell.value.is_empty() {
-                issues.push(Issue::new(
-                    "inspect.types.formula-without-cache",
-                    "warning",
-                    sheet,
-                    cell.reference.clone(),
-                    "formula cell has no cached result",
-                    false,
-                ));
+            if cell.formula.is_some() {
+                match &cell.computed {
+                    Some(CellValue::Error { code }) => issues.push(Issue::new(
+                        "inspect.types.error-value",
+                        "error",
+                        sheet,
+                        cell.reference.clone(),
+                        format!("formula result is the error value `{code}`"),
+                        true,
+                    )),
+                    None => issues.push(Issue::new(
+                        "inspect.types.formula-without-cache",
+                        "warning",
+                        sheet,
+                        cell.reference.clone(),
+                        "formula cell has no evaluated result",
+                        false,
+                    )),
+                    _ => {}
+                }
             }
         }
     }
@@ -704,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_error_values_and_missing_caches() {
+    fn reports_error_values_from_literals_and_evaluated_formulas() {
         let mut project = Project::blank("Types");
         let sheet = &mut project.sheets[0];
         sheet.write_cell(1, 1, CellValue::error("#DIV/0!"), None, None);
@@ -712,7 +685,7 @@ mod tests {
         let report = run(&project, 0, Some(&["types".to_owned()])).expect("report");
         let codes: Vec<_> =
             report["issues"].as_array().unwrap().iter().map(|issue| issue["code"].as_str().unwrap().to_owned()).collect();
-        assert!(codes.contains(&"inspect.types.error-value".to_owned()));
-        assert!(codes.contains(&"inspect.types.formula-without-cache".to_owned()));
+        assert_eq!(codes.iter().filter(|code| *code == "inspect.types.error-value").count(), 2);
+        assert!(!codes.contains(&"inspect.types.formula-without-cache".to_owned()));
     }
 }

@@ -68,11 +68,22 @@ pub fn project_from_workbook(workbook: XlsxWorkbook, title: impl Into<String>) -
                     let style = style_from_xlsx(&cell.style);
                     let formula = cell.formula.as_ref().map(|formula| normalize_formula(&formula.source));
                     let cached = cell.formula.as_ref().and_then(|formula| formula.cached.as_deref()).map(value_from_xlsx);
-                    let value = value_from_xlsx(&cell.value);
+                    // A formula cell keeps its result in `cached`/`computed`, never
+                    // as a literal, so a save can never freeze a stale value.
+                    let value = if formula.is_some() { CellValue::Empty } else { value_from_xlsx(&cell.value) };
                     if value.is_empty() && formula.is_none() && style.is_none() {
                         return None;
                     }
-                    Some(Cell { reference: cell.reference, row: cell.row, column: cell.column, value, formula, cached, style })
+                    Some(Cell {
+                        reference: cell.reference,
+                        row: cell.row,
+                        column: cell.column,
+                        value,
+                        formula,
+                        cached,
+                        style,
+                        computed: None,
+                    })
                 })
                 .collect();
             projected.normalize();
@@ -325,7 +336,7 @@ fn sheet_xml(sheet: &Sheet, table: &StyleTable) -> String {
 }
 
 fn cell_xml(cell: &Cell, table: &StyleTable) -> String {
-    if cell.is_empty() {
+    if cell.is_empty() && cell.style.is_none() {
         return String::new();
     }
     let style = table.xf_index(cell.style.as_ref());
@@ -334,7 +345,11 @@ fn cell_xml(cell: &Cell, table: &StyleTable) -> String {
         None => String::new(),
     };
     let reference = escape_attribute(&cell.reference);
-    let cached = cell.cached.clone().or_else(|| (!cell.value.is_empty()).then(|| cell.value.clone()));
+    // A formula writes the freshly evaluated result as its cached `<v>`. The
+    // imported cache and the stored literal are only fallbacks for projects
+    // that were never evaluated.
+    let cached =
+        cell.computed.clone().or_else(|| cell.cached.clone()).or_else(|| (!cell.value.is_empty()).then(|| cell.value.clone()));
 
     let mut body = format!("<c r=\"{reference}\"{style_attribute}");
     match &cell.formula {
@@ -359,7 +374,11 @@ fn cell_xml(cell: &Cell, table: &StyleTable) -> String {
             }
         }
         None => match &cell.value {
-            CellValue::Empty => return String::new(),
+            CellValue::Empty => {
+                // A style-only cell keeps its format without inventing a value.
+                body.push_str("/>");
+                return body;
+            }
             CellValue::Text { text } => {
                 body.push_str(" t=\"inlineStr\"><is><t xml:space=\"preserve\">");
                 body.push_str(&escape_text(text));

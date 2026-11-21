@@ -135,7 +135,7 @@ fn draw_cell(svg: &mut String, sheet: &Sheet, cell: &Cell, row: u32, column: u32
         svg.push_str(&format!("<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{width:.1}\" height=\"{height:.1}\" fill=\"{fill}\"/>"));
     }
 
-    let text = match &cell.value {
+    let text = match crate::eval::value_of(cell) {
         CellValue::Empty => cell.formula.clone().unwrap_or_default(),
         value => value.display_text(),
     };
