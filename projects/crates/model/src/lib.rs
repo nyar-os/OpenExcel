@@ -808,6 +808,11 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             affected.push(range_effect(project, operation, "range.fillSeries", &filled));
             0
         }
+        "range.transpose" => {
+            let written = transpose(project, operation)?;
+            affected.push(range_effect(project, operation, "range.transpose", &written));
+            0
+        }
         "range.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
@@ -1156,6 +1161,73 @@ fn fill_series(project: &mut Project, operation: &Value) -> Result<CellRange, Se
         sheet.set_cell(cell);
     }
     Ok(range)
+}
+
+/// Moves a rectangle into the transposed rectangle anchored at `target`.
+///
+/// Cell contents, styles and formula sources move verbatim; relative references
+/// inside formulas are not rewritten. Merges and overlapping destinations are
+/// rejected because the moved cells would lose their shape.
+fn transpose(project: &mut Project, operation: &Value) -> Result<CellRange, ServiceError> {
+    let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+    let range = operation
+        .get("range")
+        .and_then(Value::as_str)
+        .and_then(reference::parse_range)
+        .ok_or_else(|| ServiceError::argument("`range.transpose` needs an A1 range such as `A1:C2`"))?;
+    if !range.is_valid() || range.end_row > 1_048_576 {
+        return Err(ServiceError::argument(format!("transpose range `{}` leaves the sheet grid", range.reference())));
+    }
+    let (target_row, target_column) = operation
+        .get("target")
+        .and_then(Value::as_str)
+        .and_then(reference::parse_reference)
+        .ok_or_else(|| ServiceError::argument("`range.transpose` needs an A1 `target` anchor such as `E1`"))?;
+    let end_row = target_row
+        .checked_add(range.columns() - 1)
+        .filter(|row| *row <= 1_048_576)
+        .ok_or_else(|| ServiceError::argument("the transposed range leaves the sheet grid"))?;
+    let end_column = target_column
+        .checked_add(range.rows() - 1)
+        .filter(|column| *column <= 16_384)
+        .ok_or_else(|| ServiceError::argument("the transposed range leaves the sheet grid"))?;
+    let destination = CellRange { start_row: target_row, end_row, start_column: target_column, end_column };
+    if destination != range && destination.overlaps(&range) {
+        return Err(ServiceError::argument(format!(
+            "`range.transpose` cannot write `{}` over its source `{}`",
+            destination.reference(),
+            range.reference()
+        )));
+    }
+    let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+    if let Some(merged) =
+        sheet.merged.iter().find(|merged| merged.overlaps(&range) || merged.overlaps(&destination))
+    {
+        return Err(ServiceError::argument(format!(
+            "`range.transpose` cannot move merged range `{}`",
+            merged.reference()
+        )));
+    }
+    let matrix = (range.start_row..=range.end_row)
+        .map(|row| (range.start_column..=range.end_column).map(|column| sheet.cell(row, column).cloned()).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    sheet.clear_range(&range);
+    for (row_offset, row) in matrix.iter().enumerate() {
+        for (column_offset, cell) in row.iter().enumerate() {
+            let Some(cell) = cell.clone()
+            else {
+                continue;
+            };
+            let row = destination.start_row + column_offset as u32;
+            let column = destination.start_column + row_offset as u32;
+            let mut moved = cell;
+            moved.row = row;
+            moved.column = column;
+            moved.reference = reference::format_reference(row, column);
+            sheet.set_cell(moved);
+        }
+    }
+    Ok(destination)
 }
 
 /// Reads a finite numeric field of an operation.
