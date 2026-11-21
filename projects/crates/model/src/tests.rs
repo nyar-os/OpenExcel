@@ -237,17 +237,17 @@ fn cell_and_range_reads_return_evaluated_values() {
     let detail = crate::cell(handle, &json!({ "sheet": "Sheet1", "address": "A3" })).expect("cell");
     assert_eq!(detail["kind"], json!("formula"));
     assert_eq!(detail["formula"], json!("=SUM(A1:A2)"));
-    assert_eq!(detail["value"], json!(5.0));
+    assert_eq!(detail["value"], json!(5));
     assert_eq!(detail["cached"], json!(null));
 
     let cross = crate::cell(handle, &json!({ "address": "A4" })).expect("cell");
-    assert_eq!(cross["value"], json!(35.0));
+    assert_eq!(cross["value"], json!(35));
 
     let matrix = crate::range(handle, &json!({ "sheet": "Sheet1", "range": "A1:B2" })).expect("range");
     assert_eq!(matrix["range"], json!("A1:B2"));
     assert_eq!(matrix["rows"][0][0]["address"], json!("A1"));
-    assert_eq!(matrix["rows"][0][0]["value"], json!(2.0));
-    assert_eq!(matrix["rows"][1][0]["value"], json!(3.0));
+    assert_eq!(matrix["rows"][0][0]["value"], json!(2));
+    assert_eq!(matrix["rows"][1][0]["value"], json!(3));
     assert_eq!(matrix["rows"][0][1]["value"], json!(null));
 
     let recalc = crate::recalculate(handle).expect("recalc");
@@ -375,7 +375,7 @@ fn exports_write_evaluated_formula_values() {
     let cells = projection["sheets"][0]["cells"].as_array().expect("cells");
     let formula_cell = cells.iter().find(|cell| cell["address"] == json!("A2")).expect("A2");
     assert_eq!(formula_cell["formula"], json!("=A1*3"));
-    assert_eq!(formula_cell["value"], json!(6.0));
+    assert_eq!(formula_cell["value"], json!(6));
 
     let xlsx_path = temp_path("cached", "xlsx");
     crate::export(handle, "xlsx", &xlsx_path, true).expect("export xlsx");
@@ -415,7 +415,7 @@ fn old_project_json_without_computed_values_still_opens() {
     let handle = opened["handle"].as_u64().expect("handle");
     let detail = crate::cell(handle, &json!({ "address": "B1" })).expect("cell");
     assert_eq!(detail["formula"], json!("=A1*2"));
-    assert_eq!(detail["value"], json!(8.0));
+    assert_eq!(detail["value"], json!(8));
     crate::close(handle).expect("close");
     let _ = fs::remove_file(path);
 }
