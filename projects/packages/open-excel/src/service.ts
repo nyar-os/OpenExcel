@@ -15,6 +15,8 @@ import type {
     EditResult,
     ExportFormat,
     ExportReport,
+    FindHit,
+    FindRequest,
     InspectCheck,
     InspectReport,
     OpenExcelCapabilities,
@@ -127,6 +129,11 @@ export function range(handle: number, query: RangeQuery): RangeMatrix {
 /** Recomputes every formula of one open workbook. */
 export function recalc(handle: number): RecalcReport {
     return decode<RecalcReport>(() => binding('workbook.recalc').workbook_recalc(handle));
+}
+
+/** Searches evaluated values and formula sources of one open workbook. */
+export function find(handle: number, request: FindRequest): FindHit[] {
+    return decode<FindHit[]>(() => binding('workbook.find').workbook_find(handle, JSON.stringify(request)));
 }
 
 /** Renders one sheet of an open workbook as SVG. */

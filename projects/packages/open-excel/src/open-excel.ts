@@ -16,6 +16,8 @@ import type {
     EditResult,
     ExportOptions,
     ExportReport,
+    FindHit,
+    FindRequest,
     InspectOptions,
     InspectReport,
     OpenExcelCapabilities,
@@ -154,6 +156,15 @@ export class OpenExcel {
     async recalc(workbook: Workbook | string): Promise<RecalcReport> {
         this.assertActive();
         return service.recalc(this.handleOf(workbook));
+    }
+
+    /** Searches evaluated values and formula sources of a tracked workbook. */
+    async find(workbook: Workbook | string, request: FindRequest): Promise<readonly FindHit[]> {
+        this.assertActive();
+        if (request === undefined || typeof request.query !== 'string' || request.query.length === 0) {
+            throw new OpenExcelError('session/argument-invalid', '`find` needs a non-empty `query`');
+        }
+        return service.find(this.handleOf(workbook), request);
     }
 
     /** Writes one tracked workbook to an exchange format. */

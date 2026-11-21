@@ -18,6 +18,7 @@ import type {
     CellDetail,
     EditOperation,
     ExportFormat,
+    FindHit,
     InspectCheck,
     InspectReport,
     OpenExcelCapabilities,
@@ -106,6 +107,14 @@ function describeRange(matrix: RangeMatrix): string {
 
 function describeRecalc(report: RecalcReport): string {
     return `recalc revision=${report.revision} changed=${report.changed}`;
+}
+
+function describeFind(hits: readonly FindHit[]): string {
+    const lines = [`find hits=${hits.length}`];
+    for (const hit of hits) {
+        lines.push(`  ${hit.sheet}!${hit.address} ${hit.field} ${hit.start}-${hit.end} ${hit.text}`);
+    }
+    return lines.join('\n');
 }
 
 function parseChecks(value: string | undefined): InspectCheck[] | undefined {
@@ -347,6 +356,31 @@ cli.command('recalc', 'cli.cmd.recalc').actionCtx(async (options, _args, ctx) =>
         service.close(opened.handle);
     }
 });
+
+cli
+    .command('find', 'cli.cmd.find')
+    .option('--sheet <name>', 'cli.opt.sheet')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const query = options._?.[1];
+        if (query === undefined || query.trim().length === 0) {
+            ctx.fail('open-excel.cli.query-required', { message: 'a non-empty search query is required' });
+            return 2;
+        }
+        const sheet = text(options, 'sheet');
+        const opened = service.open(file);
+        try {
+            const hits = service.find(opened.handle, sheet === undefined ? { query } : { query, sheet });
+            ctx.emitResult(hits, describeFind(hits));
+            return 0;
+        } finally {
+            service.close(opened.handle);
+        }
+    });
 
 cli
     .command('export', 'cli.cmd.export')

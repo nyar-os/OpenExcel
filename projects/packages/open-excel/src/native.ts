@@ -23,6 +23,7 @@ export interface NativeBinding {
     workbook_cell(handle: number, requestJson: string): string;
     workbook_range(handle: number, requestJson: string): string;
     workbook_recalc(handle: number): string;
+    workbook_find(handle: number, requestJson: string): string;
     workbook_render(handle: number, requestJson?: string): string;
     workbook_export(handle: number, format: string, target: string, overwrite: boolean): string;
     workbook_close(handle: number): boolean;
