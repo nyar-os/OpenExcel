@@ -136,6 +136,34 @@ fn workbook_edit(ctx: CallContext) -> Result<JsValue> {
     respond(&ctx, &report)
 }
 
+/// Reads one cell with its evaluated value.
+#[function]
+fn workbook_cell(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let raw = text(&ctx, 1)?;
+    let request = parse_json(&raw)?;
+    let detail = open_excel_workbook::cell(handle, &request).map_err(fail)?;
+    respond(&ctx, &detail)
+}
+
+/// Reads a rectangle of cells with their evaluated values.
+#[function]
+fn workbook_range(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let raw = text(&ctx, 1)?;
+    let request = parse_json(&raw)?;
+    let matrix = open_excel_workbook::range(handle, &request).map_err(fail)?;
+    respond(&ctx, &matrix)
+}
+
+/// Recomputes every formula of one open workbook.
+#[function]
+fn workbook_recalc(ctx: CallContext) -> Result<JsValue> {
+    let handle = handle(&ctx, 0)?;
+    let report = open_excel_workbook::recalculate(handle).map_err(fail)?;
+    respond(&ctx, &report)
+}
+
 /// Renders one sheet of an open workbook as SVG.
 #[function]
 fn workbook_render(ctx: CallContext) -> Result<JsValue> {
@@ -256,6 +284,24 @@ impl IpcHandler for WorkbookIpcHandler {
                     Err(message) => failure(id, "editError", message),
                 }
             }
+            "workbook.cell" => {
+                let request = value.get("request").cloned().unwrap_or(Value::Null);
+                match call_cell(handle_of(&value), &request) {
+                    Ok(detail) => reply(id, "cellResult", json!({ "cell": detail })),
+                    Err(message) => failure(id, "cellError", message),
+                }
+            }
+            "workbook.range" => {
+                let request = value.get("request").cloned().unwrap_or(Value::Null);
+                match call_range(handle_of(&value), &request) {
+                    Ok(matrix) => reply(id, "rangeResult", json!({ "matrix": matrix })),
+                    Err(message) => failure(id, "rangeError", message),
+                }
+            }
+            "workbook.recalc" => match call_recalc(handle_of(&value)) {
+                Ok(report) => reply(id, "recalcResult", json!({ "report": report })),
+                Err(message) => failure(id, "recalcError", message),
+            },
             "workbook.render" => {
                 let request = value.get("request").cloned().unwrap_or_else(|| json!({}));
                 match call_render(handle_of(&value), &request) {
@@ -329,6 +375,18 @@ fn call_summary(handle: u64) -> std::result::Result<Value, String> {
 
 fn call_edit(handle: u64, request: &Value) -> std::result::Result<Value, String> {
     open_excel_workbook::edit(handle, request).map_err(service_failure)
+}
+
+fn call_cell(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    open_excel_workbook::cell(handle, request).map_err(service_failure)
+}
+
+fn call_range(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+    open_excel_workbook::range(handle, request).map_err(service_failure)
+}
+
+fn call_recalc(handle: u64) -> std::result::Result<Value, String> {
+    open_excel_workbook::recalculate(handle).map_err(service_failure)
 }
 
 fn call_render(handle: u64, request: &Value) -> std::result::Result<Value, String> {
@@ -587,6 +645,9 @@ register_module![
     workbook_inspect,
     workbook_summary,
     workbook_edit,
+    workbook_cell,
+    workbook_range,
+    workbook_recalc,
     workbook_render,
     workbook_export,
     workbook_close,
