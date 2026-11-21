@@ -457,6 +457,7 @@ fn unsupported_formulas_keep_cached_values_through_inspect_and_exports() {
 
     let detail = crate::cell(handle, &json!({ "address": "B1" })).expect("cell");
     assert_eq!(detail["value"], json!(7));
+    assert_eq!(detail["computedState"], json!("unsupported"));
 
     let csv_path = temp_path("unsupported", "csv");
     crate::export(handle, "csv", &csv_path, true).expect("export csv");
