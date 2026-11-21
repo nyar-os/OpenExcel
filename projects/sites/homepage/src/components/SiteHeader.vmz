@@ -1,0 +1,234 @@
+<template>
+    <header class="site-header">
+        <a class="skip-link" href="#main">Skip to content</a>
+        <div class="site-header__inner">
+            <Link to="IndexPage" class="brand">
+                <span class="brand__mark">X</span>
+                <span class="brand__name">OpenExcel</span>
+            </Link>
+
+            <div class="header-right">
+                <span class="chip chip--accent">In development</span>
+                <a class="nav-source" href="https://github.com/nyar-os/OpenExcel" rel="noopener">
+                    Source
+                </a>
+            </div>
+
+            <button
+                type="button"
+                class="menu-toggle"
+                @click="toggleMenu"
+                :aria-expanded="open ? 'true' : 'false'"
+                aria-controls="primary-nav"
+            >
+                {{ menuLabel() }}
+            </button>
+
+            <nav id="primary-nav" aria-label="Primary" class="nav" :data-open="open ? 'true' : 'false'">
+                <Link to="IndexPage" data-nav="home" :data-active="activeId === 'home' ? 'true' : 'false'">
+                    Home
+                </Link>
+                <Link to="FeaturesPage" data-nav="features" :data-active="activeId === 'features' ? 'true' : 'false'">
+                    Features
+                </Link>
+                <Link to="RoadmapPage" data-nav="roadmap" :data-active="activeId === 'roadmap' ? 'true' : 'false'">
+                    Roadmap
+                </Link>
+            </nav>
+        </div>
+    </header>
+</template>
+
+<style>
+.site-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--oex-bg);
+    border-bottom: 1px solid var(--oex-line);
+}
+
+.skip-link {
+    position: absolute;
+    top: -40px;
+    left: 16px;
+    padding: 8px 14px;
+    border: 1px solid var(--oex-accent);
+    border-radius: var(--oex-radius-sm);
+    background: var(--oex-surface);
+    color: var(--oex-accent);
+    font-size: 14px;
+}
+
+.skip-link:focus {
+    top: 8px;
+    text-decoration: none;
+}
+
+.site-header__inner {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    max-width: var(--oex-maxw);
+    margin: 0 auto;
+    padding: 14px 24px;
+}
+
+.brand {
+    order: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--oex-ink);
+}
+
+.brand:hover {
+    text-decoration: none;
+}
+
+.brand__mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: var(--oex-accent);
+    color: var(--oex-bg);
+    font-family: var(--oex-serif);
+    font-weight: 700;
+    font-size: 15px;
+}
+
+.brand__name {
+    font-family: var(--oex-serif);
+    font-weight: 600;
+    font-size: 18px;
+}
+
+.header-right {
+    order: 3;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+}
+
+.nav {
+    order: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+}
+
+.nav a {
+    color: var(--oex-muted);
+    font-size: 15px;
+}
+
+.nav a:hover {
+    color: var(--oex-ink);
+    text-decoration: none;
+}
+
+.nav a[data-active="true"] {
+    color: var(--oex-accent);
+}
+
+.nav-source {
+    padding: 6px 14px;
+    border: 1px solid var(--oex-line);
+    border-radius: 999px;
+    color: var(--oex-ink);
+    font-size: 14px;
+}
+
+.nav-source:hover {
+    border-color: var(--oex-accent);
+    text-decoration: none;
+}
+
+.menu-toggle {
+    display: none;
+    padding: 6px 12px;
+    border: 1px solid var(--oex-line);
+    border-radius: var(--oex-radius-sm);
+    background: var(--oex-surface);
+    color: var(--oex-ink);
+    font-size: 14px;
+}
+
+@media (max-width: 760px) {
+    .site-header__inner {
+        flex-wrap: wrap;
+        gap: 10px 12px;
+        padding: 12px 20px;
+    }
+
+    .brand {
+        order: 1;
+    }
+
+    .header-right {
+        order: 2;
+    }
+
+    .menu-toggle {
+        display: inline-flex;
+        order: 3;
+    }
+
+    .nav {
+        order: 4;
+        display: none;
+        width: 100%;
+        flex-direction: column;
+        gap: 2px;
+        padding-top: 4px;
+    }
+
+    .nav[data-open="true"] {
+        display: flex;
+    }
+
+    .nav a {
+        padding: 8px 2px;
+        border-top: 1px solid var(--oex-line);
+    }
+
+    .nav-source {
+        display: none;
+    }
+}
+</style>
+
+<script client>
+const NAV_BY_PATH = {
+    "/": "home",
+    "/features": "features",
+    "/roadmap": "roadmap",
+};
+
+export default class SiteHeader {
+    public activeId: string = "";
+    public open: boolean = false;
+
+    onMount() {
+        this.resolveActive();
+    }
+
+    resolveActive() {
+        if (typeof window === "undefined" || !window.location) return;
+        const path = (window.location.pathname || "/").replace(/\/+$/, "") || "/";
+        this.activeId = NAV_BY_PATH[path] ?? "";
+    }
+
+    toggleMenu() {
+        this.open = !this.open;
+    }
+
+    menuLabel() {
+        return this.open ? "Close" : "Menu";
+    }
+}
+</script>

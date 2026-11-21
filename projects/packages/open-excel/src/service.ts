@@ -1,0 +1,111 @@
+/**
+ * Orthogonal native operations.
+ *
+ * One function performs one operation and returns data; argument parsing, help
+ * text and exit codes belong to `cli.ts` and to the session surface. Nothing
+ * here knows about a command line.
+ */
+
+import { NotImplementedError, OpenExcelError, errorCodes, type OpenExcelErrorCode } from './errors.js';
+import { nativeBinding } from './native.js';
+import type {
+    ExportFormat,
+    ExportReport,
+    InspectCheck,
+    InspectReport,
+    OpenExcelCapabilities,
+    SaveReport,
+    Workbook,
+} from './types.js';
+
+/** Result of creating or opening a workbook. */
+export interface WorkbookHandle {
+    readonly handle: number;
+    readonly workbook: Workbook;
+}
+
+/** Arguments of {@link create}. */
+export interface CreateWorkbookRequest {
+    readonly title?: string;
+    readonly template?: string;
+    readonly locale?: string;
+}
+
+const knownCodes = new Set<string>(errorCodes);
+
+function binding(feature: string) {
+    const native = nativeBinding();
+    if (!native) {
+        throw new NotImplementedError(feature);
+    }
+    return native;
+}
+
+function decode<T>(work: () => string): T {
+    try {
+        return JSON.parse(work()) as T;
+    } catch (error) {
+        throw translate(error);
+    }
+}
+
+function translate(error: unknown): OpenExcelError {
+    if (error instanceof OpenExcelError) {
+        return error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    const separator = message.indexOf(': ');
+    const code = separator > 0 ? message.slice(0, separator) : '';
+    if (knownCodes.has(code)) {
+        return new OpenExcelError(code as OpenExcelErrorCode, message.slice(separator + 2), { details: { feature: code } });
+    }
+    return new OpenExcelError('format/invalid', message, { cause: error });
+}
+
+/** Reads the capability matrix of the installed addon. */
+export function capabilities(): OpenExcelCapabilities {
+    return decode<OpenExcelCapabilities>(() => binding('capabilities').capabilities());
+}
+
+/** Creates a workbook and returns its handle. */
+export function create(request: CreateWorkbookRequest): WorkbookHandle {
+    return decode<WorkbookHandle>(() =>
+        binding('create').workbook_create(
+            JSON.stringify({ title: request.title, template: request.template, locale: request.locale }),
+        ),
+    );
+}
+
+/** Opens a project file and returns its handle. */
+export function open(path: string): WorkbookHandle {
+    return decode<WorkbookHandle>(() => binding('open').workbook_open(path));
+}
+
+/** Writes one open workbook to a project path. */
+export function save(handle: number, target: string, overwrite: boolean): SaveReport {
+    return decode<SaveReport>(() => binding('workbook.save').workbook_save(handle, target, overwrite));
+}
+
+/** Runs the rule checks of one open workbook. */
+export function inspect(handle: number, checks?: readonly InspectCheck[]): InspectReport {
+    return decode<InspectReport>(() =>
+        checks === undefined
+            ? binding('workbook.inspect').workbook_inspect(handle)
+            : binding('workbook.inspect').workbook_inspect(handle, JSON.stringify(checks)),
+    );
+}
+
+/** Writes one open workbook to an export target. */
+export function exportWorkbook(
+    handle: number,
+    format: ExportFormat,
+    target: string,
+    overwrite: boolean,
+): ExportReport {
+    return decode<ExportReport>(() => binding('workbook.export').workbook_export(handle, format, target, overwrite));
+}
+
+/** Releases one open workbook handle. */
+export function close(handle: number): void {
+    binding('workbook.close').workbook_close(handle);
+}

@@ -1,11 +1,32 @@
 {
+    "name": "open-excel-workspace",
     "private": true,
+    "type": "module",
+    "packageManager": "pnpm@10.28.0",
+    "description": "OpenExcel workspace: .xlsx workbooks, formula inspection, pivot aggregation, and agent skills",
+    "keywords": ["xlsx", "excel", "formula", "pivot", "spreadsheet"],
+    "license": "MPL-2.0",
+    "repository": "https://github.com/nyar-os/OpenExcel",
     "scripts": {
         "doc": "cargo doc --no-deps --all-features",
-        "test": "cargo test --release",
+        "test:rust": "cargo test --release",
         "fmt": "cargo fmt --all",
         "p": "git push && git push --tags --prune",
         "reset": "git reset Head~ --soft",
-        "u": "cargo upgrade --workspace"
+        "u": "cargo upgrade --workspace",
+        "check:rust": "cargo fmt -p open-excel-workbook -p open-excel-napi -- --check && cargo clippy -p open-excel-workbook -p open-excel-napi --all-targets -- -D warnings && cargo test -p open-excel-workbook -p open-excel-napi",
+        "build:napi": "wae native build",
+        "build:ts": "pnpm --filter @wae/open-excel run build",
+        "build:ui": "pnpm --filter @wae/open-excel-ui run build",
+        "build": "wae build",
+        "stage:native": "wae native stage",
+        "typecheck": "pnpm -r --filter \"./projects/packages/*\" run typecheck",
+        "test": "pnpm -r --filter \"./projects/packages/*\" run test",
+        "gui": "pnpm run build && pnpm --filter @wae/open-excel exec node ./dist/cli.js gui"
+    },
+    "devDependencies": {
+        "@types/node": "^22.20.4",
+        "@wae/wae": "0.0.6",
+        "typescript": "^5.9.2"
     }
 }

@@ -4,60 +4,117 @@
 ![Formula Engine](https://img.shields.io/badge/formulas-built--in-brightgreen)
 ![Pivot](https://img.shields.io/badge/pivot-aggregate-blue)
 
-CLI/SDK for Excel `.xlsx` read/write, formula evaluation, and pivot aggregation. The processing engine handles all formats internally, exposing a native bridge to Node.js consumers and end users.
+CLI and SDK for Excel `.xlsx` workbooks: reading, writing, formula evaluation and
+pivot aggregation on one model. The processing engine is shared by the command
+line, the studio window and agent workflows, so a workbook reported in one
+surface behaves the same in the others.
 
-Key differentiators: a self-contained formula engine (not a wrapper around Excel) and data-pivot aggregation primitives on top of native `.xlsx` support.
+Key differentiators: a self-contained formula engine (not a wrapper around
+Excel) and data-pivot aggregation primitives on top of native `.xlsx` support.
 
-## 🧩 Architecture
+## Architecture
 
 ```mermaid
 graph LR
-    A[.xlsx file] --> B[OpenExcel Repo]
-    B --> C[Native bridge]
-    C --> D[Document processing engine]
+    A[.xlsx file] --> B[OpenExcel]
+    B --> C[CLI and SDK]
+    B --> D[OpenExcel Studio]
+    B --> E[Agent skills]
+    C --> F[Workbook model and engine]
+    D --> F
+    E --> F
 ```
 
-## What's NOT here
+## What it does
 
-- **No `.xlsx` parser or writer implementation** — workbook, sheet, cell, style, and shared-string handling belongs in the shared engine.
-- **No formula engine** — the self-contained expression evaluator (A1 refs, ranges, built-in functions) lives in the processing engine, not here.
-- **No pivot-table execution** — pivot aggregation, grouping, and layout are core logic in the engine; this repo only wires up the API surface.
-- **No fixture corpus** — golden `.xlsx` files, conformance fixtures, and round-trip acceptance scripts live downstream.
+- Classifies the whole workbook family: `xlsx`, `xlsm`, `xltx`, `xls`, `csv`,
+  `tsv`, `ods`, `json`, `xml` and `pdf`.
+- Declares six inspection checks — `formulas`, `references`, `cycles`, `types`,
+  `ranges` and `styles` — plus the `svg`, `png` and `pdf` render targets and the
+  `xlsx`, `xlsm`, `csv`, `json` and `pdf` export targets.
+- Ships one command line, one SDK entry point and one desktop shell that all read
+  the same capability matrix.
 
-## 🚀 Usage (placeholder)
+## What it does NOT do
+
+- **No workbook engine yet.** Reading, writing, recalculation, pivot execution,
+  rendering and export are not implemented.
+- **No `.xlsx` parser, writer or formula evaluator in this repository** — that
+  logic belongs to the shared processing engine.
+- **No fixture corpus** — golden workbooks, conformance fixtures and round-trip
+  acceptance scripts live downstream.
+- **No capability claims from file extensions.** Classification is not support.
+
+Because there is no engine, every domain operation currently rejects with the
+stable code `capability/not-implemented`. The matrix returned by `capabilities`
+reports that honestly instead of guessing.
+
+## Usage
 
 ```bash
-# List sheets and cell counts
-open-excel inspect workbook.xlsx
+# Show what this build supports (everything domain-level is not-implemented)
+open-excel capabilities
 
-# Export sheet to CSV or JSON
-open-excel export workbook.xlsx --sheet Sheet1 --format csv -o sheet.csv
+# Create a workbook project file
+open-excel create --out ledger.oexcel --title "Ledger" --template blank
 
-# Evaluate and re-save (useful when formulas need refreshing)
-open-excel recalc workbook.xlsx -o recalculated.xlsx
+# Open a project file and print its sheets and cells
+open-excel open ledger.oexcel
 
-# Pivot aggregate
-open-excel pivot workbook.xlsx --rows category --cols month --values sales --sum -o pivot.xlsx
+# Run formula, reference and range checks
+open-excel inspect ledger.oexcel --checks formulas,references,ranges
+
+# Export to an exchange format
+open-excel export ledger.oexcel --format csv --out ledger.csv
+
+# Open the studio window
+open-excel gui
 ```
 
 ```ts
-import { OpenExcel } from '@wae/open-excel';
+import { OpenExcel, OpenExcelError } from '@wae/open-excel';
 
-const wb = await OpenExcel.read('workbook.xlsx');
-const sheet = wb.sheets['Sheet1'];
+const excel = new OpenExcel({ locale: 'en' });
 
-// self-contained formula evaluation — no Excel required
-const result = await sheet.evaluate('=SUM(B2:B100)');
-
-await wb.write('updated.xlsx');
+try {
+    // Rejects with `capability/not-implemented` until the engine lands.
+    const workbook = await excel.open({ path: 'ledger.oexcel' });
+    console.log(workbook.sheets.length);
+} catch (error) {
+    if (error instanceof OpenExcelError) {
+        console.log(error.code); // capability/not-implemented
+    }
+}
 ```
 
-## 🧱 Repo layout
+## Repo layout
 
 ```
 OpenExcel/
 ├── package.json
-└── Readme.md
+├── readme.md
+└── projects/
+    ├── packages/
+    │   ├── open-excel/              # command line and SDK
+    │   ├── open-excel-skills/       # agent skills
+    │   ├── open-excel-ui/           # studio shell
+    │   └── open-excel-<platform>-<arch>/   # prebuilt addon packages
+    └── sites/
+        └── homepage/                # product site
 ```
 
-This is a scaffold repo. The native bridge wiring, CLI binary, and CLI entry points are added incrementally as the shared processing engine lands.
+This repository ships the framework around the workbook model: the command line,
+the SDK contracts, the studio shell, the product site and the agent skills.
+Workbook parsing, formula evaluation, pivot aggregation and export arrive with
+the shared processing engine; until then the declared surface stays honest and
+rejects domain calls with `capability/not-implemented`.
+
+## Status
+
+Scaffold with a declared surface. The capability matrix, error codes, format
+registry, CLI command tree, studio shell and skills routing exist; no workbook is
+created, opened, inspected or exported yet.
+
+## License
+
+MPL-2.0. See [License.md](License.md).

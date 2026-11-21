@@ -1,0 +1,177 @@
+<template>
+    <footer class="site-footer">
+        <div class="site-footer__inner">
+            <div class="site-footer__brand">
+                <span class="site-footer__wordmark">
+                    <span class="site-footer__mark">X</span>
+                    OpenExcel
+                </span>
+                <p class="site-footer__tag">
+                    Spreadsheet workbooks for reading, formula inspection and
+                    agent authoring. One declared model, no guessed capabilities.
+                </p>
+            </div>
+
+            <nav aria-label="Product" class="footer-group">
+                <b>Product</b>
+                <Link to="IndexPage">
+                    Home
+                </Link>
+                <Link to="FeaturesPage">
+                    Features
+                </Link>
+                <Link to="RoadmapPage">
+                    Roadmap
+                </Link>
+            </nav>
+
+            <nav aria-label="Developers" class="footer-group">
+                <b>Developers</b>
+                <a href="https://github.com/nyar-os/OpenExcel/tree/master/projects/packages/open-excel" rel="noopener">
+                    CLI
+                </a>
+                <a href="https://github.com/nyar-os/OpenExcel/tree/master/projects/packages/open-excel/src" rel="noopener">
+                    SDK
+                </a>
+                <a href="https://github.com/nyar-os/OpenExcel/tree/master/projects/packages/open-excel-skills" rel="noopener">
+                    Skills
+                </a>
+            </nav>
+
+            <nav aria-label="Project" class="footer-group">
+                <b>Project</b>
+                <a href="https://github.com/nyar-os/OpenExcel" rel="noopener">
+                    Source code
+                </a>
+                <a href="https://github.com/nyar-os/OpenExcel/issues" rel="noopener">
+                    Issues
+                </a>
+                <a href="https://github.com/nyar-os/OpenExcel/releases" rel="noopener">
+                    Releases
+                </a>
+            </nav>
+
+            <div class="site-footer__bottom">
+                <span>MPL-2.0 licensed · Built with VMZ</span>
+                <span class="chip">No public release yet</span>
+            </div>
+        </div>
+    </footer>
+</template>
+
+<style>
+.site-footer {
+    margin-top: 64px;
+    border-top: 1px solid var(--oex-line);
+    background: var(--oex-surface);
+}
+
+.site-footer__inner {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr;
+    gap: 32px;
+    max-width: var(--oex-maxw);
+    margin: 0 auto;
+    padding: 40px 24px 32px;
+}
+
+.site-footer__wordmark {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--oex-serif);
+    font-weight: 600;
+    font-size: 17px;
+}
+
+.site-footer__mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: var(--oex-accent-soft);
+    color: var(--oex-accent);
+    font-size: 13px;
+}
+
+.site-footer__tag {
+    margin: 8px 0 0;
+    max-width: 320px;
+    color: var(--oex-muted);
+    font-size: 14px;
+}
+
+.footer-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.footer-group b {
+    margin-bottom: 4px;
+    color: var(--oex-muted);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.footer-group a {
+    color: var(--oex-ink);
+    font-size: 14px;
+}
+
+.footer-group a:hover {
+    color: var(--oex-accent);
+}
+
+.site-footer__bottom {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 8px;
+    padding-top: 16px;
+    border-top: 1px solid var(--oex-line);
+    color: var(--oex-muted);
+    font-size: 13px;
+}
+
+@media (max-width: 900px) {
+    .site-footer__inner {
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+    }
+
+    .site-footer__brand {
+        grid-column: 1 / -1;
+    }
+}
+
+@media (max-width: 620px) {
+    .site-footer {
+        margin-top: 44px;
+    }
+
+    .site-footer__inner {
+        grid-template-columns: 1fr;
+        padding: 28px 20px 24px;
+    }
+
+    .site-footer__brand {
+        grid-column: auto;
+    }
+
+    .site-footer__bottom {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}
+</style>
+
+<script client>
+export default class SiteFooter {}
+</script>

@@ -1,0 +1,21 @@
+{
+    "cli": {
+        "intro": "OpenExcel — read, inspect and export spreadsheet workbooks on one declared model.",
+        "cmd": {
+            "capabilities": "Print what this build supports, honestly",
+            "create": "Create a workbook project file",
+            "open": "Open a project file and print its sheets and cells",
+            "inspect": "Run formula, reference and range checks on a project file",
+            "export": "Export a project file to a spreadsheet format",
+            "gui": "Open the OpenExcel Studio window"
+        },
+        "opt": {
+            "out": "File to write",
+            "title": "Workbook title",
+            "template": "Template to start from",
+            "overwrite": "Replace the output file when it already exists",
+            "checks": "Comma-separated checks: formulas, references, cycles, types, ranges, styles",
+            "format": "Export format: xlsx, xlsm, csv, json or pdf"
+        }
+    }
+}

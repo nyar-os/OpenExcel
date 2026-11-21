@@ -1,0 +1,81 @@
+<template>
+    <div class="studio-root">
+        <slot />
+    </div>
+</template>
+
+<style>
+:root {
+    --oex-bg: #f2f5f0;
+    --oex-surface: #ffffff;
+    --oex-surface-2: #e7eee5;
+    --oex-ink: #172019;
+    --oex-muted: #5c6b5f;
+    --oex-line: #cfd9cd;
+    --oex-accent: #2f6f3e;
+    --oex-accent-soft: #dcebdc;
+    --oex-danger: #8c2f2f;
+    --oex-radius: 10px;
+    --oex-warn: #6f5a14;
+    --oex-warn-soft: #f1ecd8;
+    --oex-mono: "Cascadia Code", "Consolas", monospace;
+    --oex-serif: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    --oex-shadow: 0 12px 30px rgba(23, 32, 25, 0.1);
+    --oex-shadow-soft: 0 1px 3px rgba(23, 32, 25, 0.06);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+body {
+    background: var(--oex-bg);
+    color: var(--oex-ink);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+}
+
+h1,
+h2,
+h3 {
+    margin: 0;
+    font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+button {
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+input,
+textarea,
+select {
+    font: inherit;
+    color: inherit;
+}
+
+.studio-root {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+</style>
+
+<script client>
+export default class Application {}
+</script>
