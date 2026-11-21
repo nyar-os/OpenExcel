@@ -353,10 +353,20 @@ pub fn recalculate(handle: u64) -> Result<Value, ServiceError> {
 fn primitive(value: &CellValue) -> Value {
     match value {
         CellValue::Text { text } => Value::String(text.clone()),
-        CellValue::Number { number } => serde_json::Number::from_f64(*number).map(Value::Number).unwrap_or(Value::Null),
+        CellValue::Number { number } => number_json(*number),
         CellValue::Bool { value } => Value::Bool(*value),
         CellValue::Error { code } => Value::String(code.clone()),
         CellValue::Empty => Value::Null,
+    }
+}
+
+/// Projects a number so whole values lose their `.0`, matching CSV and XLSX.
+fn number_json(number: f64) -> Value {
+    if number.fract() == 0.0 && number.abs() <= 9_007_199_254_740_992.0 {
+        Value::Number(serde_json::Number::from(number as i64))
+    }
+    else {
+        serde_json::Number::from_f64(number).map(Value::Number).unwrap_or(Value::Null)
     }
 }
 
