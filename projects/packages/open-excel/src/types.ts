@@ -334,7 +334,7 @@ export type SheetVisibility = 'visible' | 'hidden' | 'veryHidden';
 
 /** One rectangle a range operation rewrote, as reported by `Workbook.edit()`. */
 export interface AffectedRange {
-    readonly op: 'range.sort' | 'range.fillSeries';
+    readonly op: 'range.sort' | 'range.fillSeries' | 'range.transpose';
     readonly sheet: string;
     /** A1 rectangle such as `A1:A5`. */
     readonly range: string;
@@ -436,6 +436,19 @@ export type EditOperation =
           readonly start?: number;
           /** Step; defaults to the difference of the first two cells, else `1`. */
           readonly step?: number;
+      }
+    | {
+          /**
+           * Moves `range` into the transposed rectangle anchored at `target`.
+           * Cell contents, styles and formula sources move verbatim, while
+           * relative references inside formulas are not rewritten. Merged cells
+           * and destinations that overlap the source are rejected.
+           */
+          readonly op: 'range.transpose';
+          readonly sheet: string;
+          readonly range: string;
+          /** Top-left cell of the destination rectangle. */
+          readonly target: CellAddress;
       }
     | { readonly op: 'range.clear'; readonly sheet: string; readonly range: string };
 

@@ -744,6 +744,90 @@ fn fill_series_writes_linear_numbers_and_rejects_bad_ranges() {
 }
 
 #[test]
+fn transpose_moves_cells_into_the_target_rectangle() {
+    let created = crate::create(&json!({ "title": "Transpose" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    ["a", "b", "c"],
+                    [1, 2, { "formula": "=1+2" }],
+                ] },
+                { "op": "format.set", "sheet": "Sheet1", "range": "A1", "style": { "bold": true, "fill": "#ffeeaa" } },
+            ]
+        }),
+    )
+    .expect("seed");
+
+    let edited = crate::edit(
+        handle,
+        &json!({
+            "operations": [{ "op": "range.transpose", "sheet": "Sheet1", "range": "A1:C2", "target": "E1" }]
+        }),
+    )
+    .expect("transpose");
+    assert_eq!(edited["revision"], json!(2));
+    assert_eq!(
+        edited["affected"],
+        json!([{ "op": "range.transpose", "sheet": "Sheet1", "range": "E1:F3" }])
+    );
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert!(sheet.cell(1, 1).is_none(), "the source rectangle is cleared");
+    assert_eq!(sheet.cell(1, 5).expect("E1").value, CellValue::text("a"));
+    assert_eq!(sheet.cell(1, 6).expect("F1").value, CellValue::number(1.0));
+    assert_eq!(sheet.cell(2, 5).expect("E2").value, CellValue::text("b"));
+    assert_eq!(sheet.cell(2, 6).expect("F2").value, CellValue::number(2.0));
+    assert_eq!(sheet.cell(3, 5).expect("E3").value, CellValue::text("c"));
+    let moved_formula = sheet.cell(3, 6).expect("F3");
+    assert_eq!(moved_formula.formula.as_deref(), Some("=1+2"));
+    assert_eq!(moved_formula.computed, Some(CellValue::number(3.0)));
+    let style = sheet.cell(1, 5).and_then(|cell| cell.style.as_ref()).expect("E1 style");
+    assert_eq!(style.bold, Some(true));
+    assert_eq!(style.fill.as_deref(), Some("#ffeeaa"));
+
+    let missing = crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.transpose", "sheet": "Sheet1", "range": "A1:B2" }] }),
+    )
+    .expect_err("missing target");
+    assert_eq!(missing.code, "session/argument-invalid");
+    let overlap = crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.transpose", "sheet": "Sheet1", "range": "A1:C2", "target": "B1" }] }),
+    )
+    .expect_err("overlapping target");
+    assert_eq!(overlap.code, "session/argument-invalid");
+    let outside = crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.transpose", "sheet": "Sheet1", "range": "A1:B1", "target": "A1048576" }] }),
+    )
+    .expect_err("grid");
+    assert_eq!(outside.code, "session/argument-invalid");
+
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "H1", "rows": [[1, 2], [3, 4]] },
+                { "op": "range.transpose", "sheet": "Sheet1", "range": "H1:I2", "target": "H1" },
+            ]
+        }),
+    )
+    .expect("square transpose in place");
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 8).expect("H1").value, CellValue::number(1.0));
+    assert_eq!(sheet.cell(1, 9).expect("I1").value, CellValue::number(3.0));
+    assert_eq!(sheet.cell(2, 8).expect("H2").value, CellValue::number(2.0));
+    assert_eq!(sheet.cell(2, 9).expect("I2").value, CellValue::number(4.0));
+    crate::close(handle).expect("close");
+}
+
+#[test]
 fn pdf_export_writes_a_paginated_document() {
     let created = crate::create(&json!({ "title": "Report" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");
