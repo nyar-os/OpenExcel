@@ -72,8 +72,21 @@ export interface OpenExcelCapabilities {
     readonly project: SupportLevel;
     readonly formats: Readonly<Record<WorkbookFormat, FormatCapability>>;
     readonly checks: Readonly<Record<InspectCheck, SupportLevel>>;
+    /** Formula functions the engine evaluates and how it treats the rest. */
+    readonly formulas: FormulaCapability;
     readonly renderers: Readonly<Record<RenderFormat, SupportLevel>>;
     readonly exportTargets: Readonly<Record<ExportFormat, SupportLevel>>;
+}
+
+/** Formula disclosure of the installed engine. */
+export interface FormulaCapability {
+    /** Function names the evaluator implements, uppercase. */
+    readonly functions: readonly string[];
+    /**
+     * `preserve-cached` means a formula using an unknown function keeps the
+     * value the source workbook cached instead of `#NAME?`.
+     */
+    readonly unsupportedBehavior: 'preserve-cached';
 }
 
 /** Options of `OpenExcel.create()`. */
@@ -309,6 +322,9 @@ export interface CellStyleInput {
     readonly wrap?: boolean;
 }
 
+/** Sheet tab visibility accepted by `sheet.setVisibility`. */
+export type SheetVisibility = 'visible' | 'hidden' | 'veryHidden';
+
 /** One operation of `Workbook.edit()`. */
 export type EditOperation =
     | {
@@ -326,6 +342,31 @@ export type EditOperation =
           readonly rows: readonly (readonly CellInput[])[];
       }
     | { readonly op: 'format.set'; readonly sheet: string; readonly range: string; readonly style: CellStyleInput }
+    | {
+          /** Merges `start:end` when `merge` is true and unmerges it otherwise. */
+          readonly op: 'merge.set';
+          readonly sheet: string;
+          readonly start: CellAddress;
+          readonly end: CellAddress;
+          readonly merge: boolean;
+      }
+    | {
+          /** Freezes `row` rows and `column` columns; zero for both clears the pane. */
+          readonly op: 'freeze.set';
+          readonly sheet: string;
+          readonly row: number;
+          readonly column: number;
+      }
+    | { readonly op: 'sheet.setVisibility'; readonly sheet: string; readonly visibility: SheetVisibility }
+    | {
+          /** Replaces text inside `range` and reports the replacement count. */
+          readonly op: 'cell.replaceText';
+          readonly sheet: string;
+          readonly range: string;
+          readonly find: string;
+          readonly replace: string;
+          readonly matchCase?: boolean;
+      }
     | { readonly op: 'sheet.add'; readonly name: string; readonly index?: number }
     | { readonly op: 'sheet.rename'; readonly sheet: string; readonly name: string }
     | { readonly op: 'sheet.remove'; readonly sheet: string }
@@ -344,4 +385,37 @@ export interface EditRequest {
 export interface EditResult {
     readonly revision: number;
     readonly workbook: Workbook;
+    /** Occurrences changed by `cell.replaceText` operations. */
+    readonly replacements: number;
+}
+
+/** Which field a find hit matched. */
+export type FindField = 'value' | 'formula';
+
+/** Options of `Workbook.find()`. Both channels are searched by default. */
+export interface FindOptions {
+    /** Match case exactly; defaults to false. */
+    readonly matchCase?: boolean;
+    /** Search formula sources; defaults to true. */
+    readonly formulas?: boolean;
+    /** Search evaluated values; defaults to true. */
+    readonly values?: boolean;
+}
+
+/** Request of `Workbook.find()`. */
+export interface FindRequest {
+    readonly query: string;
+    /** Sheet name or id; every sheet when omitted. */
+    readonly sheet?: string;
+    readonly options?: FindOptions;
+}
+
+/** One match, with character offsets into the searched field. */
+export interface FindHit {
+    readonly sheet: string;
+    readonly address: CellAddress;
+    readonly field: FindField;
+    readonly start: number;
+    readonly end: number;
+    readonly text: string;
 }
