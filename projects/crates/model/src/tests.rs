@@ -419,3 +419,173 @@ fn old_project_json_without_computed_values_still_opens() {
     crate::close(handle).expect("close");
     let _ = fs::remove_file(path);
 }
+
+#[test]
+fn unsupported_formulas_keep_cached_values_through_inspect_and_exports() {
+    let path = temp_path("unsupported", "oexcel");
+    let project = json!({
+        "format": "open-excel/project",
+        "version": 0,
+        "title": "Unsupported",
+        "sheets": [{
+            "id": "sheet-1",
+            "name": "Sheet1",
+            "index": 0,
+            "visibility": "visible",
+            "cells": [
+                { "reference": "A1", "row": 1, "column": 1, "value": { "kind": "number", "number": 2 } },
+                {
+                    "reference": "B1",
+                    "row": 1,
+                    "column": 2,
+                    "value": { "kind": "empty" },
+                    "formula": "=FUTUREFN(A1)",
+                    "cached": { "kind": "number", "number": 7 }
+                }
+            ]
+        }]
+    });
+    fs::write(&path, serde_json::to_vec(&project).expect("serialize")).expect("write project");
+    let opened = crate::open(&path).expect("open project");
+    let handle = opened["handle"].as_u64().expect("handle");
+
+    let report = crate::inspect(handle, Some(vec!["formulas".to_owned(), "types".to_owned()])).expect("inspect");
+    assert_eq!(report["passed"], json!(true));
+    let issues = report["issues"].as_array().expect("issues");
+    let unsupported = issues.iter().find(|issue| issue["code"] == json!("formulas.unsupported-function")).expect("warning");
+    assert_eq!(unsupported["severity"], json!("warning"));
+
+    let detail = crate::cell(handle, &json!({ "address": "B1" })).expect("cell");
+    assert_eq!(detail["value"], json!(7));
+
+    let csv_path = temp_path("unsupported", "csv");
+    crate::export(handle, "csv", &csv_path, true).expect("export csv");
+    assert_eq!(fs::read_to_string(&csv_path).expect("read csv"), "2,7\n");
+
+    let json_path = temp_path("unsupported", "json");
+    crate::export(handle, "json", &json_path, true).expect("export json");
+    let projection: serde_json::Value = serde_json::from_slice(&fs::read(&json_path).expect("read json")).expect("parse json");
+    let cells = projection["sheets"][0]["cells"].as_array().expect("cells");
+    let formula_cell = cells.iter().find(|cell| cell["address"] == json!("B1")).expect("B1");
+    assert_eq!(formula_cell["value"], json!(7));
+
+    let xlsx_path = temp_path("unsupported", "xlsx");
+    crate::export(handle, "xlsx", &xlsx_path, true).expect("export xlsx");
+    let read =
+        xlsx::read_project("unsupported.xlsx", &fs::read(&xlsx_path).expect("read xlsx"), "Unsupported").expect("read xlsx");
+    assert_eq!(read.sheets[0].cell(1, 2).expect("B1").cached, Some(CellValue::number(7.0)));
+
+    crate::close(handle).expect("close");
+    for path in [path, csv_path, json_path, xlsx_path] {
+        let _ = fs::remove_file(path);
+    }
+}
+
+#[test]
+fn merge_freeze_visibility_and_replace_text_edits_apply() {
+    let created = crate::create(&json!({ "title": "Structure" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let edited = crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "sheet.add", "name": "Data" },
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["Alpha alpha ALPHA"], ["alpha ALPHA"]] },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "C1", "end": "D2", "merge": true },
+                { "op": "freeze.set", "sheet": "Sheet1", "row": 1, "column": 1 },
+                { "op": "sheet.setVisibility", "sheet": "Data", "visibility": "hidden" },
+                { "op": "cell.replaceText", "sheet": "Sheet1", "range": "A1:A1", "find": "alpha", "replace": "x" },
+                {
+                    "op": "cell.replaceText",
+                    "sheet": "Sheet1",
+                    "range": "A2:A2",
+                    "find": "alpha",
+                    "replace": "y",
+                    "matchCase": true
+                }
+            ]
+        }),
+    )
+    .expect("edit");
+    assert_eq!(edited["replacements"], json!(4));
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 1).expect("A1").value, CellValue::text("x x x"));
+    assert_eq!(sheet.cell(2, 1).expect("A2").value, CellValue::text("y ALPHA"));
+    assert_eq!(sheet.merged, vec![CellRange { start_row: 1, end_row: 2, start_column: 3, end_column: 4 }]);
+    assert_eq!(sheet.freeze, Some(Freeze { columns: 1, rows: 1 }));
+    assert_eq!(project.sheet("Data").expect("data").visibility, crate::model::SheetVisibility::Hidden);
+
+    let overlap = crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "merge.set", "sheet": "Sheet1", "start": "C2", "end": "D3", "merge": true }] }),
+    )
+    .expect_err("overlap");
+    assert_eq!(overlap.code, "session/argument-invalid");
+    let outside = crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "merge.set", "sheet": "Sheet1", "start": "A1", "end": "XFE1", "merge": true }] }),
+    )
+    .expect_err("outside");
+    assert_eq!(outside.code, "session/argument-invalid");
+
+    crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "merge.set", "sheet": "Sheet1", "start": "C1", "end": "D2", "merge": false }] }),
+    )
+    .expect("unmerge");
+    assert!(project_of(handle).sheet("Sheet1").expect("sheet").merged.is_empty());
+    crate::close(handle).expect("close");
+}
+
+#[test]
+fn find_reports_character_offsets_for_values_and_formulas() {
+    let created = crate::create(&json!({ "title": "Search" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "value": "Find me find" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "B1", "formula": "=LEFT(A1,4)" }
+            ]
+        }),
+    )
+    .expect("edit");
+
+    let hits = crate::find(handle, &json!({ "query": "find", "options": { "formulas": false } })).expect("find values");
+    assert_eq!(hits.as_array().expect("hits").len(), 3);
+    assert_eq!(hits[0]["address"], json!("A1"));
+    assert_eq!(hits[0]["field"], json!("value"));
+    assert_eq!((hits[0]["start"].clone(), hits[0]["end"].clone()), (json!(0), json!(4)));
+    assert_eq!(hits[0]["text"], json!("Find"));
+    assert_eq!((hits[1]["start"].clone(), hits[1]["end"].clone()), (json!(8), json!(12)));
+    assert_eq!(hits[1]["text"], json!("find"));
+    assert_eq!(hits[2]["address"], json!("B1"));
+    assert_eq!(hits[2]["text"], json!("Find"));
+
+    let case_sensitive = crate::find(handle, &json!({ "query": "find", "options": { "matchCase": true } })).expect("case");
+    assert_eq!(case_sensitive.as_array().expect("hits").len(), 1);
+    assert_eq!(case_sensitive[0]["start"], json!(8));
+
+    let formulas = crate::find(handle, &json!({ "query": "LEFT", "options": { "values": false } })).expect("formulas");
+    assert_eq!(formulas.as_array().expect("hits").len(), 1);
+    assert_eq!(formulas[0]["field"], json!("formula"));
+    assert_eq!((formulas[0]["start"].clone(), formulas[0]["end"].clone()), (json!(1), json!(5)));
+
+    let missing = crate::find(handle, &json!({ "query": "find", "sheet": "Nope" })).expect_err("missing sheet");
+    assert_eq!(missing.code, "object/not-found");
+    crate::close(handle).expect("close");
+}
+
+#[test]
+fn capabilities_list_the_real_formula_functions() {
+    let matrix = crate::capabilities();
+    assert_eq!(matrix["formulas"]["unsupportedBehavior"], json!("preserve-cached"));
+    let functions = matrix["formulas"]["functions"].as_array().expect("functions");
+    for name in ["VLOOKUP", "INDEX", "MATCH", "IFERROR", "TEXTJOIN", "ROUNDDOWN"] {
+        assert!(functions.contains(&json!(name)), "`{name}` is missing from the capability list");
+    }
+    assert!(!functions.contains(&json!("XLOOKUP")));
+}
