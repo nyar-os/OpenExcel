@@ -332,6 +332,14 @@ export interface CellStyleInput {
 /** Sheet tab visibility accepted by `sheet.setVisibility`. */
 export type SheetVisibility = 'visible' | 'hidden' | 'veryHidden';
 
+/** One rectangle a range operation rewrote, as reported by `Workbook.edit()`. */
+export interface AffectedRange {
+    readonly op: 'range.sort' | 'range.fillSeries';
+    readonly sheet: string;
+    /** A1 rectangle such as `A1:A5`. */
+    readonly range: string;
+}
+
 /** One operation of `Workbook.edit()`. */
 export type EditOperation =
     | {
@@ -414,6 +422,21 @@ export type EditOperation =
           /** Keeps the first row of `range` in place. */
           readonly hasHeader?: boolean;
       }
+    | {
+          /**
+           * Fills `range`, a single row or a single column, with a linear numeric
+           * series. The first cell seeds the start and, when two numeric cells are
+           * present, the second seeds the step. Existing styles stay in place and
+           * formulas inside the range are replaced.
+           */
+          readonly op: 'range.fillSeries';
+          readonly sheet: string;
+          readonly range: string;
+          /** First value; defaults to the numeric first cell of `range`. */
+          readonly start?: number;
+          /** Step; defaults to the difference of the first two cells, else `1`. */
+          readonly step?: number;
+      }
     | { readonly op: 'range.clear'; readonly sheet: string; readonly range: string };
 
 /** Request of `Workbook.edit()`. */
@@ -429,6 +452,8 @@ export interface EditResult {
     readonly workbook: Workbook;
     /** Occurrences changed by `cell.replaceText` operations. */
     readonly replacements: number;
+    /** Rectangles rewritten by range operations. */
+    readonly affected?: readonly AffectedRange[];
 }
 
 /** Which field a find hit matched. */

@@ -627,18 +627,24 @@ pub fn edit(handle: u64, request: &Value) -> Result<Value, ServiceError> {
             .ok_or_else(|| ServiceError::argument("an edit request needs an `operations` array"))?;
         let mut project = entry.project.clone();
         let mut replacements = 0usize;
+        let mut affected: Vec<Value> = Vec::new();
         for operation in operations {
-            replacements += apply_operation(&mut project, operation)?;
+            replacements += apply_operation(&mut project, operation, &mut affected)?;
         }
         project.normalize();
         eval::recalculate(&mut project);
         entry.project = project;
         entry.revision += 1;
-        Ok(json!({ "revision": entry.revision, "workbook": summary_json(handle, entry), "replacements": replacements }))
+        Ok(json!({
+            "revision": entry.revision,
+            "workbook": summary_json(handle, entry),
+            "replacements": replacements,
+            "affected": affected,
+        }))
     })?
 }
 
-fn apply_operation(project: &mut Project, operation: &Value) -> Result<usize, ServiceError> {
+fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<Value>) -> Result<usize, ServiceError> {
     let kind = operation
         .get("op")
         .and_then(Value::as_str)
@@ -794,6 +800,12 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<usize, Se
                     }
                 }
             }
+            affected.push(range_effect(project, operation, "range.sort", &range));
+            0
+        }
+        "range.fillSeries" => {
+            let filled = fill_series(project, operation)?;
+            affected.push(range_effect(project, operation, "range.fillSeries", &filled));
             0
         }
         "range.set" => {
@@ -1047,6 +1059,103 @@ fn sort_column(operation: &Value, range: &CellRange) -> Result<u32, ServiceError
         )));
     }
     Ok(column)
+}
+
+/// Describes the rectangle one range operation rewrote.
+fn range_effect(project: &Project, operation: &Value, op: &str, range: &CellRange) -> Value {
+    let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+    let sheet = project.sheet(key).map(|sheet| sheet.name.clone()).unwrap_or_else(|| key.to_owned());
+    json!({ "op": op, "sheet": sheet, "range": range.reference() })
+}
+
+/// Reads an optional finite number from an operation field.
+fn optional_finite(operation: &Value, key: &str) -> Result<Option<f64>, ServiceError> {
+    match operation.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .map(Some)
+            .ok_or_else(|| ServiceError::argument(format!("`{key}` must be a finite number"))),
+    }
+}
+
+/// Fills one single-row or single-column range with a linear numeric series.
+///
+/// The first cell seeds the start and the first two cells seed the step unless
+/// the request names `start` and `step` explicitly. Existing styles stay on
+/// their cells, while formulas inside the range are replaced by the series.
+fn fill_series(project: &mut Project, operation: &Value) -> Result<CellRange, ServiceError> {
+    let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+    let range = operation
+        .get("range")
+        .and_then(Value::as_str)
+        .and_then(reference::parse_range)
+        .ok_or_else(|| ServiceError::argument("`range.fillSeries` needs an A1 range such as `A1:A5`"))?;
+    if !range.is_valid() || range.end_row > 1_048_576 {
+        return Err(ServiceError::argument(format!("series range `{}` leaves the sheet grid", range.reference())));
+    }
+    let vertical = match (range.rows() > 1, range.columns() > 1) {
+        (true, false) => true,
+        (false, true) => false,
+        (false, false) => {
+            return Err(ServiceError::argument("`range.fillSeries` needs a range that spans at least two cells"));
+        }
+        (true, true) => return Err(ServiceError::argument("`range.fillSeries` needs a single row or a single column")),
+    };
+    // Seed values come from evaluated cells, matching how sorting reads keys.
+    eval::recalculate(project);
+    let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+    if let Some(merged) = sheet.merged.iter().find(|merged| merged.overlaps(&range)) {
+        return Err(ServiceError::argument(format!(
+            "`range.fillSeries` cannot write through merged range `{}`",
+            merged.reference()
+        )));
+    }
+    let coordinates = if vertical {
+        (range.start_row..=range.end_row).map(|row| (row, range.start_column)).collect::<Vec<_>>()
+    }
+    else {
+        (range.start_column..=range.end_column).map(|column| (range.start_row, column)).collect::<Vec<_>>()
+    };
+    let seeds = coordinates
+        .iter()
+        .map(|(row, column)| sheet.cell(*row, *column).map(eval::value_of).unwrap_or(CellValue::Empty))
+        .collect::<Vec<_>>();
+    let (start, inferred) = match optional_finite(operation, "start")? {
+        Some(start) => (start, false),
+        None => match seeds.first() {
+            Some(CellValue::Number { number }) => (*number, true),
+            _ => {
+                return Err(ServiceError::argument(
+                    "`range.fillSeries` needs a numeric first cell or an explicit `start`",
+                ));
+            }
+        },
+    };
+    let step = match optional_finite(operation, "step")? {
+        Some(step) => step,
+        None => match (inferred, seeds.get(1)) {
+            (true, Some(CellValue::Number { number })) => number - start,
+            _ => 1.0,
+        },
+    };
+    for (offset, (row, column)) in coordinates.iter().enumerate() {
+        let style = sheet.cell(*row, *column).and_then(|cell| cell.style.clone());
+        let cell = model::Cell {
+            reference: reference::format_reference(*row, *column),
+            row: *row,
+            column: *column,
+            value: CellValue::number(start + step * offset as f64),
+            formula: None,
+            cached: None,
+            style,
+            computed: None,
+            computed_state: None,
+        };
+        sheet.set_cell(cell);
+    }
+    Ok(range)
 }
 
 /// Reads a finite numeric field of an operation.
