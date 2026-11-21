@@ -34,15 +34,20 @@ graph LR
   with the project before the file is moved into place.
 - Runs six checks on the project model: `formulas`, `references`, `cycles`,
   `types`, `ranges` and `styles`.
+- Evaluates a built-in formula subset (aggregation, lookup, text, statistics and
+  math functions such as `SUM`, `VLOOKUP`, `TEXTJOIN`, `MEDIAN` and `SUMPRODUCT`)
+  and reports the exact function list through `capabilities()`.
 - Edits cells, sheets and ranges with revision-conflict detection, and renders a
-  sheet grid as SVG.
+  sheet grid as SVG. The CLI exposes cell edits, raw operation batches, range
+  sorting, cell styles and sheet add/rename/remove/duplicate/move.
 - Classifies the whole workbook family: `xlsx`, `xlsm`, `xltx`, `xls`, `csv`,
   `tsv`, `ods`, `json`, `xml` and `pdf`.
 
 ## What it does NOT do
 
-- **No formula calculation.** Formulas are stored, inspected and written; cached
-  results are only preserved from the source file or supplied by the caller.
+- **No calculation for functions outside the implemented list.** A formula using
+  an unknown function keeps the cached result from the source file; the engine
+  reports it as `unsupported` rather than inventing a value.
 - **No `xls`, `ods` or `xml` import**, no `pdf`/`png` rendering, no PDF export,
   and no macro-preserving `xlsm` export. The capability matrix reports
   `unsupported` for each.
@@ -63,6 +68,13 @@ open-excel export ledger.oexcel --format xlsx --out ledger.xlsx
 # Edit one cell and save the result
 open-excel edit ledger.oexcel --cell A1 --value 42 --out ledger.oexcel --overwrite
 open-excel edit ledger.oexcel --cell B2 --formula "=A1*2" --out ledger.oexcel --overwrite
+
+# Apply a batch of operations, sort a range, style cells, manage sheets
+open-excel edit ledger.oexcel --ops '[{"op":"cell.set","sheet":"Sheet1","reference":"A1","value":7}]'
+open-excel sort ledger.oexcel --range A1:C9 --column 3 --header --out ledger.oexcel --overwrite
+open-excel format ledger.oexcel --range A1:C1 --bold --fill "#ffeeaa" --out ledger.oexcel --overwrite
+open-excel sheet ledger.oexcel --add Notes --out ledger.oexcel --overwrite
+open-excel sheet ledger.oexcel --rename Sheet1 --to Ledger --out ledger.oexcel --overwrite
 
 # Print the current summary, or save a copy
 open-excel summary ledger.oexcel
@@ -112,9 +124,10 @@ OpenExcel/
 ## Status
 
 The workbook model, XLSX importer, XLSX writer, CSV/TSV reader, inspection
-rules, revision-aware editor, SVG renderer, CLI commands and SDK methods are
-implemented in `projects/crates/model`. Formula evaluation and pivot aggregation
-remain delegated to upstream work and are not claimed by the capability matrix.
+rules, revision-aware editor, formula evaluator, SVG renderer, CLI commands and
+SDK methods are implemented in `projects/crates/model`. Formula coverage is the
+declared list in `capabilities().formulas.functions`; pivot aggregation remains
+delegated to upstream work and is not claimed by the capability matrix.
 
 ## License
 

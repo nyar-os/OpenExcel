@@ -21,14 +21,14 @@ mod xlsx;
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
+use boost_fs::{OverwritePolicy, PublishOptions, publish_bytes_with_options};
 use serde_json::{Map, Value, json};
 
 pub use error::ServiceError;
 
-use model::{CellRange, CellValue, PROJECT_FORMAT, PROJECT_VERSION, Project, Sheet};
+use model::{CellRange, CellValue, PROJECT_FORMAT, PROJECT_VERSION, Project, Sheet, SheetColumn, SheetRow};
 
 /// Workbook formats the product classifies.
 pub const WORKBOOK_FORMATS: &[&str] = &["xlsx", "xlsm", "xltx", "xls", "csv", "tsv", "ods", "json", "xml", "pdf"];
@@ -41,8 +41,6 @@ pub const RENDER_FORMATS: &[&str] = &["svg", "png", "pdf"];
 
 /// Export targets the SDK exposes.
 pub const EXPORT_TARGETS: &[&str] = &["xlsx", "xlsm", "csv", "tsv", "json", "html", "pdf"];
-
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// What this build can actually do.
 ///
@@ -913,6 +911,34 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<usize, Se
                 if row == 0 && column == 0 { None } else { Some(model::Freeze { columns: column as u32, rows: row as u32 }) };
             0
         }
+        "column.setWidth" => {
+            let column = layout_column(operation)?;
+            let width = required_number(operation, "width", "`column.setWidth` needs a numeric `width`")?;
+            if !(0.1..=255.0).contains(&width) {
+                return Err(ServiceError::argument(format!("column width {width} must be between 0.1 and 255")));
+            }
+            let hidden = layout_hidden(operation)?;
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            set_column_layout(sheet, column, width, hidden);
+            0
+        }
+        "row.setHeight" => {
+            let row = operation
+                .get("row")
+                .and_then(Value::as_u64)
+                .filter(|row| (1..=1_048_576).contains(row))
+                .ok_or_else(|| ServiceError::argument("`row.setHeight` needs a `row` between 1 and 1048576"))? as u32;
+            let height = required_number(operation, "height", "`row.setHeight` needs a numeric `height`")?;
+            if !(0.0..=409.0).contains(&height) {
+                return Err(ServiceError::argument(format!("row height {height} must be between 0 and 409")));
+            }
+            let hidden = layout_hidden(operation)?;
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            set_row_layout(sheet, row, height, hidden);
+            0
+        }
         "cell.replaceText" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
@@ -1021,6 +1047,98 @@ fn sort_column(operation: &Value, range: &CellRange) -> Result<u32, ServiceError
         )));
     }
     Ok(column)
+}
+
+/// Reads a finite numeric field of an operation.
+fn required_number(operation: &Value, key: &str, message: &str) -> Result<f64, ServiceError> {
+    operation.get(key).and_then(Value::as_f64).filter(|value| value.is_finite()).ok_or_else(|| ServiceError::argument(message))
+}
+
+/// Reads the optional `hidden` flag of a layout operation.
+fn layout_hidden(operation: &Value) -> Result<Option<bool>, ServiceError> {
+    match operation.get("hidden") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(ServiceError::argument("`hidden` must be a boolean")),
+    }
+}
+
+/// Resolves the one-based column of a `column.setWidth` request.
+///
+/// Accepts a one-based number or a column letter such as `B`.
+fn layout_column(operation: &Value) -> Result<u32, ServiceError> {
+    let column = match operation.get("column") {
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| ServiceError::argument("`column.setWidth` needs a positive `column`"))?,
+        Some(Value::String(text)) => reference::column_number(text.trim())
+            .ok_or_else(|| ServiceError::argument(format!("`{text}` is not a column letter such as `B`")))?,
+        Some(_) => return Err(ServiceError::argument("`column.setWidth` needs a numeric or letter `column`")),
+        None => return Err(ServiceError::argument("`column.setWidth` needs a `column`")),
+    };
+    if column == 0 || column > 16_384 {
+        return Err(ServiceError::argument("the column leaves the sheet grid"));
+    }
+    Ok(column)
+}
+
+/// Writes the width of one column, splitting the record that covers it and
+/// merging adjacent records that share the same width, custom and hidden flag.
+fn set_column_layout(sheet: &mut Sheet, column: u32, width: f64, hidden: Option<bool>) {
+    let hidden = hidden.unwrap_or_else(|| {
+        sheet
+            .columns
+            .iter()
+            .rev()
+            .find(|record| record.min <= column && column <= record.max)
+            .map(|record| record.hidden)
+            .unwrap_or(false)
+    });
+    let mut records: Vec<SheetColumn> = Vec::with_capacity(sheet.columns.len() + 2);
+    for record in std::mem::take(&mut sheet.columns) {
+        if record.max < column || record.min > column {
+            records.push(record);
+            continue;
+        }
+        if record.min < column {
+            records.push(SheetColumn { max: column - 1, ..record.clone() });
+        }
+        if record.max > column {
+            records.push(SheetColumn { min: column + 1, ..record });
+        }
+    }
+    records.push(SheetColumn { min: column, max: column, width, custom: true, hidden });
+    records.sort_by_key(|record| record.min);
+    let mut merged: Vec<SheetColumn> = Vec::with_capacity(records.len());
+    for record in records {
+        match merged.last_mut() {
+            Some(last)
+                if last.max + 1 == record.min
+                    && last.width == record.width
+                    && last.custom == record.custom
+                    && last.hidden == record.hidden =>
+            {
+                last.max = record.max;
+            }
+            _ => merged.push(record),
+        }
+    }
+    sheet.columns = merged;
+}
+
+/// Writes the height of one row, keeping the row records sorted by index.
+fn set_row_layout(sheet: &mut Sheet, row: u32, height: f64, hidden: Option<bool>) {
+    if let Some(record) = sheet.rows.iter_mut().find(|record| record.index == row) {
+        record.height = Some(height);
+        record.custom_height = true;
+        if let Some(hidden) = hidden {
+            record.hidden = hidden;
+        }
+        return;
+    }
+    sheet.rows.push(SheetRow { index: row, height: Some(height), custom_height: true, hidden: hidden.unwrap_or(false) });
+    sheet.rows.sort_by_key(|record| record.index);
 }
 
 /// Orders two sort keys; blanks always trail, everything else follows the
@@ -1258,27 +1376,21 @@ fn write_file(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), ServiceE
     if path.exists() && !overwrite {
         return Err(ServiceError::new("io/target-exists", format!("{} already exists; pass `--overwrite`", path.display())));
     }
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("workbook");
-    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temporary = parent.join(format!(".{name}.{}.{counter}.tmp", std::process::id()));
-    fs::write(&temporary, bytes)
-        .map_err(|error| ServiceError::io(format!("failed to write {}: {error}", temporary.display())))?;
-    if path.exists()
-        && let Err(error) = fs::remove_file(path)
-    {
-        let _ = fs::remove_file(&temporary);
-        return Err(ServiceError::io(format!("failed to replace {}: {error}", path.display())));
+    let options = PublishOptions {
+        overwrite: if overwrite { OverwritePolicy::Replace } else { OverwritePolicy::RefuseExisting },
+        ..PublishOptions::default()
+    };
+    publish_bytes_with_options(publish_target(path), bytes, options)
+        .map_err(|error| ServiceError::io(format!("failed to write {}: {error}", path.display())))
+}
+
+/// Keeps a bare file name anchored to the working directory so the publisher
+/// always has a folder to stage in.
+fn publish_target(path: &Path) -> PathBuf {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => path.to_path_buf(),
+        _ => PathBuf::from(".").join(path),
     }
-    if let Err(error) = fs::rename(&temporary, path) {
-        let _ = fs::remove_file(&temporary);
-        return Err(ServiceError::io(format!("failed to move the temporary file into {}: {error}", path.display())));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

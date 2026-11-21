@@ -2,8 +2,8 @@
 /**
  * Command-line assembly only.
  *
- * Every command maps options onto one operation of `service.ts`; workbook logic,
- * saving and export stay native. Help text and errors come from
+ * Every command maps options onto one method of `new OpenExcel()`; workbook
+ * logic, saving and export stay native. Help text and errors come from
  * `@wae/commander`, so the CLI does not grow its own parser.
  */
 
@@ -12,10 +12,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { createCli } from '@wae/commander';
 
-import * as service from './service.js';
+import { OpenExcel } from './open-excel.js';
 import { runGui } from './gui.js';
 import type {
     CellDetail,
+    CellStyleInput,
     EditOperation,
     ExportFormat,
     FindResult,
@@ -30,6 +31,16 @@ import type {
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 const cli = createCli('open-excel').locales(path.join(here, '..', 'locales')).intro('cli.intro');
+
+/** Runs `work` against one session and always releases its handles. */
+async function withSession<T>(work: (excel: OpenExcel) => Promise<T>): Promise<T> {
+    const excel = new OpenExcel();
+    try {
+        return await work(excel);
+    } finally {
+        await excel.dispose();
+    }
+}
 
 // Exported for contract audits that import the built entry to inspect the
 // command tree. Nothing runs until the file is executed as the program entry.
@@ -144,8 +155,21 @@ function parseValue(value: string): string | number | boolean | null {
     return value;
 }
 
+/** Parses `--ops`; `undefined` means the payload is not a non-empty JSON array. */
+function parseOperations(value: string): EditOperation[] | undefined {
+    try {
+        const parsed: unknown = JSON.parse(value);
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+            return undefined;
+        }
+        return parsed as EditOperation[];
+    } catch {
+        return undefined;
+    }
+}
+
 cli.command('capabilities', 'cli.cmd.capabilities').actionCtx(async (_options, _args, ctx) => {
-    const matrix = service.capabilities();
+    const matrix = await withSession((excel) => excel.capabilities());
     ctx.emitResult(matrix, describeCapabilities(matrix));
     return 0;
 });
@@ -162,17 +186,15 @@ cli
             ctx.fail('open-excel.cli.out-required', { message: '`--out <file>` is required' });
             return 2;
         }
-        const created = service.create({ title: text(options, 'title'), template: text(options, 'template') });
-        try {
-            const report = service.save(created.handle, out, flag(options, 'overwrite'));
+        await withSession(async (excel) => {
+            const workbook = await excel.create({ title: text(options, 'title'), template: text(options, 'template') });
+            const report = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
             ctx.emitResult(
-                { ...report, workbook: created.workbook },
+                { ...report, workbook },
                 `created ${out} revision=${report.revision} sheets=${report.sheets}`,
             );
-            return 0;
-        } finally {
-            service.close(created.handle);
-        }
+        });
+        return 0;
     });
 
 cli.command('summary', 'cli.cmd.summary').actionCtx(async (options, _args, ctx) => {
@@ -181,14 +203,12 @@ cli.command('summary', 'cli.cmd.summary').actionCtx(async (options, _args, ctx) 
         ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
         return 2;
     }
-    const opened = service.open(file);
-    try {
-        const workbook = service.summary(opened.handle);
-        ctx.emitResult(workbook, describeWorkbook(workbook));
-        return 0;
-    } finally {
-        service.close(opened.handle);
-    }
+    await withSession(async (excel) => {
+        const workbook = await excel.open({ path: file });
+        const summary = await excel.summary(workbook);
+        ctx.emitResult(summary, describeWorkbook(summary));
+    });
+    return 0;
 });
 
 cli
@@ -202,14 +222,12 @@ cli
             return 2;
         }
         const out = text(options, 'out') ?? file;
-        const opened = service.open(file);
-        try {
-            const report = service.save(opened.handle, out, flag(options, 'overwrite'));
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const report = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
             ctx.emitResult(report, `saved ${out} revision=${report.revision} sheets=${report.sheets}`);
-            return 0;
-        } finally {
-            service.close(opened.handle);
-        }
+        });
+        return 0;
     });
 
 cli
@@ -218,6 +236,7 @@ cli
     .option('--cell <ref>', 'cli.opt.cell')
     .option('--value <text>', 'cli.opt.value')
     .option('--formula <formula>', 'cli.opt.formula')
+    .option('--ops <json>', 'cli.opt.ops')
     .option('--out <file>', 'cli.opt.out')
     .option('--overwrite', 'cli.opt.overwrite')
     .actionCtx(async (options, _args, ctx) => {
@@ -226,37 +245,370 @@ cli
             ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
             return 2;
         }
+        const rawOperations = text(options, 'ops');
         const reference = text(options, 'cell');
-        if (reference === undefined) {
-            ctx.fail('open-excel.cli.cell-required', { message: '`--cell <A1>` is required' });
-            return 2;
-        }
         const formula = text(options, 'formula');
         const rawValue = text(options, 'value');
-        if (formula === undefined && rawValue === undefined) {
-            ctx.fail('open-excel.cli.value-required', { message: '`--value` or `--formula` is required' });
-            return 2;
+        let operations: EditOperation[];
+        let label: string;
+        if (rawOperations !== undefined) {
+            if (reference !== undefined || formula !== undefined || rawValue !== undefined) {
+                ctx.fail('open-excel.cli.ops-exclusive', {
+                    message: '`--ops` cannot be combined with `--cell`, `--value` or `--formula`',
+                });
+                return 2;
+            }
+            const parsed = parseOperations(rawOperations);
+            if (parsed === undefined) {
+                ctx.fail('open-excel.cli.ops-invalid', {
+                    message: '`--ops` must be a JSON array of operations',
+                });
+                return 2;
+            }
+            operations = parsed;
+            label = `${operations.length} operation${operations.length === 1 ? '' : 's'}`;
         }
-        const operation: EditOperation = {
-            op: 'cell.set',
-            sheet: text(options, 'sheet') ?? 'Sheet1',
-            reference,
-            ...(formula === undefined ? { value: parseValue(rawValue ?? '') } : { formula }),
-        };
-        const opened = service.open(file);
-        try {
-            const result = service.edit(opened.handle, { operations: [operation] });
+        else {
+            if (reference === undefined) {
+                ctx.fail('open-excel.cli.cell-required', { message: '`--cell <A1>` is required' });
+                return 2;
+            }
+            if (formula === undefined && rawValue === undefined) {
+                ctx.fail('open-excel.cli.value-required', { message: '`--value` or `--formula` is required' });
+                return 2;
+            }
+            operations = [
+                {
+                    op: 'cell.set',
+                    sheet: text(options, 'sheet') ?? 'Sheet1',
+                    reference,
+                    ...(formula === undefined ? { value: parseValue(rawValue ?? '') } : { formula }),
+                },
+            ];
+            label = reference;
+        }
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const result = await excel.edit(workbook, { operations });
             const out = text(options, 'out');
             if (out !== undefined) {
-                const saved = service.save(opened.handle, out, flag(options, 'overwrite'));
-                ctx.emitResult({ ...result, saved }, `edited ${reference} revision=${saved.revision} saved=${out}`);
-                return 0;
+                const saved = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
+                ctx.emitResult({ ...result, saved }, `edited ${label} revision=${saved.revision} saved=${out}`);
+                return;
             }
-            ctx.emitResult(result, `edited ${reference} revision=${result.revision}`);
-            return 0;
-        } finally {
-            service.close(opened.handle);
+            ctx.emitResult(result, `edited ${label} revision=${result.revision}`);
+        });
+        return 0;
+    });
+
+cli
+    .command('sort', 'cli.cmd.sort')
+    .option('--sheet <name>', 'cli.opt.sheet')
+    .option('--range <range>', 'cli.opt.range')
+    .option('--column <column>', 'cli.opt.column')
+    .option('--descending', 'cli.opt.descending')
+    .option('--header', 'cli.opt.header')
+    .option('--out <file>', 'cli.opt.out')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
         }
+        const range = text(options, 'range');
+        if (range === undefined) {
+            ctx.fail('open-excel.cli.range-required', { message: '`--range <A1:C4>` is required' });
+            return 2;
+        }
+        const rawColumn = text(options, 'column');
+        if (rawColumn === undefined || rawColumn.trim().length === 0) {
+            ctx.fail('open-excel.cli.column-required', { message: '`--column <n|letter>` is required' });
+            return 2;
+        }
+        const trimmedColumn = rawColumn.trim();
+        const column = /^\d+$/.test(trimmedColumn) ? Number(trimmedColumn) : trimmedColumn;
+        const sheet = text(options, 'sheet') ?? 'Sheet1';
+        const operation: EditOperation = {
+            op: 'range.sort',
+            sheet,
+            range,
+            column,
+            ascending: !flag(options, 'descending'),
+            hasHeader: flag(options, 'header'),
+        };
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const result = await excel.edit(workbook, { operations: [operation] });
+            const out = text(options, 'out');
+            if (out !== undefined) {
+                const saved = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
+                ctx.emitResult(
+                    { ...result, saved },
+                    `sorted ${sheet}!${range} revision=${saved.revision} saved=${out}`,
+                );
+                return;
+            }
+            ctx.emitResult(result, `sorted ${sheet}!${range} revision=${result.revision}`);
+        });
+        return 0;
+    });
+
+cli
+    .command('format', 'cli.cmd.format')
+    .option('--sheet <name>', 'cli.opt.sheet')
+    .option('--range <range>', 'cli.opt.range')
+    .option('--bold', 'cli.opt.bold')
+    .option('--italic', 'cli.opt.italic')
+    .option('--font-size <pt>', 'cli.opt.font-size')
+    .option('--font-color <color>', 'cli.opt.font-color')
+    .option('--fill <color>', 'cli.opt.fill')
+    .option('--number-format <format>', 'cli.opt.number-format')
+    .option('--align <align>', 'cli.opt.align')
+    .option('--wrap', 'cli.opt.wrap')
+    .option('--out <file>', 'cli.opt.out')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const range = text(options, 'range');
+        if (range === undefined) {
+            ctx.fail('open-excel.cli.range-required', { message: '`--range <A1:C4>` is required' });
+            return 2;
+        }
+        const style: {
+            bold?: boolean;
+            italic?: boolean;
+            fontSize?: number;
+            fontColor?: string;
+            fill?: string;
+            numberFormat?: string;
+            align?: CellStyleInput['align'];
+            wrap?: boolean;
+        } = {};
+        if (flag(options, 'bold')) {
+            style.bold = true;
+        }
+        if (flag(options, 'italic')) {
+            style.italic = true;
+        }
+        if (flag(options, 'wrap')) {
+            style.wrap = true;
+        }
+        const fontSize = text(options, 'font-size');
+        if (fontSize !== undefined) {
+            const value = Number(fontSize);
+            if (!Number.isFinite(value) || value <= 0) {
+                ctx.fail('open-excel.cli.font-size-invalid', {
+                    message: '`--font-size` must be a positive number',
+                });
+                return 2;
+            }
+            style.fontSize = value;
+        }
+        const fontColor = text(options, 'font-color');
+        if (fontColor !== undefined) {
+            style.fontColor = fontColor;
+        }
+        const fill = text(options, 'fill');
+        if (fill !== undefined) {
+            style.fill = fill;
+        }
+        const numberFormat = text(options, 'number-format');
+        if (numberFormat !== undefined) {
+            style.numberFormat = numberFormat;
+        }
+        const align = text(options, 'align');
+        if (align !== undefined) {
+            const allowed = ['left', 'center', 'right', 'justify', 'distribute', 'fill'] as const;
+            if (!(allowed as readonly string[]).includes(align)) {
+                ctx.fail('open-excel.cli.align-invalid', {
+                    message: `\`--align\` must be one of ${allowed.join(', ')}`,
+                });
+                return 2;
+            }
+            style.align = align as CellStyleInput['align'];
+        }
+        if (Object.keys(style).length === 0) {
+            ctx.fail('open-excel.cli.style-required', { message: 'at least one style option is required' });
+            return 2;
+        }
+        const sheet = text(options, 'sheet') ?? 'Sheet1';
+        const operation: EditOperation = { op: 'format.set', sheet, range, style };
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const result = await excel.edit(workbook, { operations: [operation] });
+            const out = text(options, 'out');
+            if (out !== undefined) {
+                const saved = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
+                ctx.emitResult(
+                    { ...result, saved },
+                    `formatted ${sheet}!${range} revision=${saved.revision} saved=${out}`,
+                );
+                return;
+            }
+            ctx.emitResult(result, `formatted ${sheet}!${range} revision=${result.revision}`);
+        });
+        return 0;
+    });
+
+cli
+    .command('layout', 'cli.cmd.layout')
+    .option('--sheet <name>', 'cli.opt.sheet')
+    .option('--column <column>', 'cli.opt.layout-column')
+    .option('--width <units>', 'cli.opt.width')
+    .option('--row <row>', 'cli.opt.layout-row')
+    .option('--height <pt>', 'cli.opt.height')
+    .option('--hide', 'cli.opt.hide')
+    .option('--out <file>', 'cli.opt.out')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const rawWidth = text(options, 'width');
+        const rawHeight = text(options, 'height');
+        if (rawWidth === undefined && rawHeight === undefined) {
+            ctx.fail('open-excel.cli.layout-size-required', {
+                message: '`--width <units>` or `--height <pt>` is required',
+            });
+            return 2;
+        }
+        const sheet = text(options, 'sheet') ?? 'Sheet1';
+        const hide = flag(options, 'hide');
+        const operations: EditOperation[] = [];
+        const labels: string[] = [];
+        if (rawWidth !== undefined) {
+            const rawColumn = text(options, 'column')?.trim();
+            if (rawColumn === undefined || rawColumn.length === 0) {
+                ctx.fail('open-excel.cli.column-required', {
+                    message: '`--width` needs `--column <letter|n>`',
+                });
+                return 2;
+            }
+            const width = Number(rawWidth);
+            if (!Number.isFinite(width)) {
+                ctx.fail('open-excel.cli.layout-width-invalid', { message: '`--width` must be a number' });
+                return 2;
+            }
+            const column = /^\d+$/.test(rawColumn) ? Number(rawColumn) : rawColumn;
+            operations.push({ op: 'column.setWidth', sheet, column, width, ...(hide ? { hidden: true } : {}) });
+            labels.push(`column ${rawColumn}`);
+        }
+        if (rawHeight !== undefined) {
+            const rawRow = text(options, 'row')?.trim();
+            if (rawRow === undefined || !/^\d+$/.test(rawRow) || Number(rawRow) < 1) {
+                ctx.fail('open-excel.cli.row-required', { message: '`--height` needs a positive `--row <n>`' });
+                return 2;
+            }
+            const height = Number(rawHeight);
+            if (!Number.isFinite(height)) {
+                ctx.fail('open-excel.cli.layout-height-invalid', { message: '`--height` must be a number' });
+                return 2;
+            }
+            operations.push({ op: 'row.setHeight', sheet, row: Number(rawRow), height, ...(hide ? { hidden: true } : {}) });
+            labels.push(`row ${rawRow}`);
+        }
+        const label = labels.join(' and ');
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const result = await excel.edit(workbook, { operations });
+            const out = text(options, 'out');
+            if (out !== undefined) {
+                const saved = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
+                ctx.emitResult({ ...result, saved }, `laid out ${label} revision=${saved.revision} saved=${out}`);
+                return;
+            }
+            ctx.emitResult(result, `laid out ${label} revision=${result.revision}`);
+        });
+        return 0;
+    });
+
+cli
+    .command('sheet', 'cli.cmd.sheet')
+    .option('--add <name>', 'cli.opt.add')
+    .option('--rename <name>', 'cli.opt.rename')
+    .option('--to <name>', 'cli.opt.to')
+    .option('--remove <name>', 'cli.opt.remove')
+    .option('--duplicate <name>', 'cli.opt.duplicate')
+    .option('--as <name>', 'cli.opt.as')
+    .option('--move <name>', 'cli.opt.move')
+    .option('--index <n>', 'cli.opt.index')
+    .option('--out <file>', 'cli.opt.out')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const add = text(options, 'add');
+        const rename = text(options, 'rename');
+        const remove = text(options, 'remove');
+        const duplicate = text(options, 'duplicate');
+        const move = text(options, 'move');
+        const selected = [add, rename, remove, duplicate, move].filter((value) => value !== undefined);
+        if (selected.length !== 1) {
+            ctx.fail('open-excel.cli.sheet-action-required', {
+                message: 'exactly one of `--add`, `--rename`, `--remove`, `--duplicate` or `--move` is required',
+            });
+            return 2;
+        }
+        let operation: EditOperation;
+        let label: string;
+        if (add !== undefined) {
+            operation = { op: 'sheet.add', name: add };
+            label = `added ${add}`;
+        }
+        else if (rename !== undefined) {
+            const to = text(options, 'to');
+            if (to === undefined) {
+                ctx.fail('open-excel.cli.to-required', { message: '`--rename` needs `--to <new>`' });
+                return 2;
+            }
+            operation = { op: 'sheet.rename', sheet: rename, name: to };
+            label = `renamed ${rename} to ${to}`;
+        }
+        else if (remove !== undefined) {
+            operation = { op: 'sheet.remove', sheet: remove };
+            label = `removed ${remove}`;
+        }
+        else if (duplicate !== undefined) {
+            const name = text(options, 'as');
+            if (name === undefined) {
+                ctx.fail('open-excel.cli.as-required', { message: '`--duplicate` needs `--as <new>`' });
+                return 2;
+            }
+            operation = { op: 'sheet.duplicate', sheet: duplicate, name };
+            label = `duplicated ${duplicate} as ${name}`;
+        }
+        else {
+            const rawIndex = text(options, 'index');
+            const index = rawIndex === undefined ? Number.NaN : Number(rawIndex);
+            if (!Number.isInteger(index) || index < 0) {
+                ctx.fail('open-excel.cli.index-required', { message: '`--move` needs a zero-based `--index <n>`' });
+                return 2;
+            }
+            operation = { op: 'sheet.move', sheet: move as string, index };
+            label = `moved ${move} to ${index}`;
+        }
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const result = await excel.edit(workbook, { operations: [operation] });
+            const out = text(options, 'out');
+            if (out !== undefined) {
+                const saved = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
+                ctx.emitResult({ ...result, saved }, `sheet ${label} revision=${saved.revision} saved=${out}`);
+                return;
+            }
+            ctx.emitResult(result, `sheet ${label} revision=${result.revision}`);
+        });
+        return 0;
     });
 
 cli.command('open', 'cli.cmd.open').actionCtx(async (options, _args, ctx) => {
@@ -265,13 +617,11 @@ cli.command('open', 'cli.cmd.open').actionCtx(async (options, _args, ctx) => {
         ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
         return 2;
     }
-    const opened = service.open(file);
-    try {
-        ctx.emitResult(opened.workbook, describeWorkbook(opened.workbook));
-        return 0;
-    } finally {
-        service.close(opened.handle);
-    }
+    await withSession(async (excel) => {
+        const workbook = await excel.open({ path: file });
+        ctx.emitResult(workbook, describeWorkbook(workbook));
+    });
+    return 0;
 });
 
 cli
@@ -283,14 +633,13 @@ cli
             ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
             return 2;
         }
-        const opened = service.open(file);
-        try {
-            const report = service.inspect(opened.handle, parseChecks(text(options, 'checks')));
+        let passed = false;
+        await withSession(async (excel) => {
+            const report = await excel.inspect({ path: file }, { checks: parseChecks(text(options, 'checks')) });
             ctx.emitResult(report, describeReport(report));
-            return report.passed ? 0 : 1;
-        } finally {
-            service.close(opened.handle);
-        }
+            passed = report.passed;
+        });
+        return passed ? 0 : 1;
     });
 
 cli
@@ -307,14 +656,12 @@ cli
             ctx.fail('open-excel.cli.address-required', { message: 'an A1 cell address such as `B4` is required' });
             return 2;
         }
-        const opened = service.open(file);
-        try {
-            const detail = service.cell(opened.handle, { sheet: text(options, 'sheet'), address });
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const detail = await excel.cell(workbook, { sheet: text(options, 'sheet'), address });
             ctx.emitResult(detail, describeCell(detail));
-            return 0;
-        } finally {
-            service.close(opened.handle);
-        }
+        });
+        return 0;
     });
 
 cli
@@ -331,14 +678,12 @@ cli
             ctx.fail('open-excel.cli.range-required', { message: 'an A1 range such as `A1:C4` is required' });
             return 2;
         }
-        const opened = service.open(file);
-        try {
-            const matrix = service.range(opened.handle, { sheet: text(options, 'sheet'), range });
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const matrix = await excel.range(workbook, { sheet: text(options, 'sheet'), range });
             ctx.emitResult(matrix, describeRange(matrix));
-            return 0;
-        } finally {
-            service.close(opened.handle);
-        }
+        });
+        return 0;
     });
 
 cli.command('recalc', 'cli.cmd.recalc').actionCtx(async (options, _args, ctx) => {
@@ -347,14 +692,12 @@ cli.command('recalc', 'cli.cmd.recalc').actionCtx(async (options, _args, ctx) =>
         ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
         return 2;
     }
-    const opened = service.open(file);
-    try {
-        const report = service.recalc(opened.handle);
+    await withSession(async (excel) => {
+        const workbook = await excel.open({ path: file });
+        const report = await excel.recalc(workbook);
         ctx.emitResult(report, describeRecalc(report));
-        return 0;
-    } finally {
-        service.close(opened.handle);
-    }
+    });
+    return 0;
 });
 
 cli
@@ -372,14 +715,12 @@ cli
             return 2;
         }
         const sheet = text(options, 'sheet');
-        const opened = service.open(file);
-        try {
-            const result = service.find(opened.handle, sheet === undefined ? { query } : { query, sheet });
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const result = await excel.find(workbook, sheet === undefined ? { query } : { query, sheet });
             ctx.emitResult(result, describeFind(result));
-            return 0;
-        } finally {
-            service.close(opened.handle);
-        }
+        });
+        return 0;
     });
 
 cli
@@ -408,14 +749,12 @@ cli
             ctx.fail('open-excel.cli.out-required', { message: '`--out <file>` is required' });
             return 2;
         }
-        const opened = service.open(file);
-        try {
-            const report = service.exportWorkbook(opened.handle, format as ExportFormat, out, false);
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const report = await excel.export(workbook, { format: format as ExportFormat, target: out });
             ctx.emitResult(report, `exported ${out} format=${report.format} losses=${report.losses.length}`);
-            return 0;
-        } finally {
-            service.close(opened.handle);
-        }
+        });
+        return 0;
     });
 
 cli.command('gui', 'cli.cmd.gui').actionCtx(async (_options, _args, ctx) => {
