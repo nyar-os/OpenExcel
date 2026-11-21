@@ -214,3 +214,206 @@ fn svg_render_exposes_the_grid() {
     assert_eq!(unsupported.code, "format/unsupported");
     crate::close(handle).expect("close");
 }
+
+#[test]
+fn cell_and_range_reads_return_evaluated_values() {
+    let created = crate::create(&json!({ "title": "Reads" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "value": 2 },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A2", "value": 3 },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A3", "formula": "=SUM(A1:A2)" },
+                { "op": "sheet.add", "name": "Data" },
+                { "op": "range.set", "sheet": "Data", "start": "A1", "rows": [[10], [20]] },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A4", "formula": "=SUM(Data!A1:A2)+A3" },
+            ]
+        }),
+    )
+    .expect("edit");
+
+    let detail = crate::cell(handle, &json!({ "sheet": "Sheet1", "address": "A3" })).expect("cell");
+    assert_eq!(detail["kind"], json!("formula"));
+    assert_eq!(detail["formula"], json!("=SUM(A1:A2)"));
+    assert_eq!(detail["value"], json!(5.0));
+    assert_eq!(detail["cached"], json!(null));
+
+    let cross = crate::cell(handle, &json!({ "address": "A4" })).expect("cell");
+    assert_eq!(cross["value"], json!(35.0));
+
+    let matrix = crate::range(handle, &json!({ "sheet": "Sheet1", "range": "A1:B2" })).expect("range");
+    assert_eq!(matrix["range"], json!("A1:B2"));
+    assert_eq!(matrix["rows"][0][0]["address"], json!("A1"));
+    assert_eq!(matrix["rows"][0][0]["value"], json!(2.0));
+    assert_eq!(matrix["rows"][1][0]["value"], json!(3.0));
+    assert_eq!(matrix["rows"][0][1]["value"], json!(null));
+
+    let recalc = crate::recalculate(handle).expect("recalc");
+    assert_eq!(recalc["revision"], json!(1));
+    assert_eq!(recalc["changed"], json!(0));
+    crate::close(handle).expect("close");
+}
+
+#[test]
+fn range_and_format_edits_apply() {
+    let created = crate::create(&json!({ "title": "Edits" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let edited = crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                {
+                    "op": "range.set",
+                    "sheet": "Sheet1",
+                    "start": "B2",
+                    "rows": [
+                        [1, "two", true],
+                        [null, { "formula": "=B2*2" }, 4],
+                    ]
+                },
+                {
+                    "op": "format.set",
+                    "sheet": "Sheet1",
+                    "range": "B2:D3",
+                    "style": { "bold": true, "fill": "#ffeeaa", "align": "center", "numberFormat": "0.00" }
+                },
+            ]
+        }),
+    )
+    .expect("edit");
+    assert_eq!(edited["revision"], json!(1));
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(2, 2).expect("B2").value, CellValue::number(1.0));
+    assert_eq!(sheet.cell(2, 3).expect("C2").value, CellValue::text("two"));
+    assert_eq!(sheet.cell(2, 4).expect("D2").value, CellValue::boolean(true));
+    assert_eq!(sheet.cell(3, 2).map(|cell| cell.value.clone()), Some(CellValue::Empty), "a null input clears the value");
+    assert_eq!(sheet.cell(3, 3).expect("C3").computed, Some(CellValue::number(2.0)));
+    assert_eq!(sheet.cell(3, 4).expect("D3").value, CellValue::number(4.0));
+    for (row, column) in [(2, 2), (3, 2), (3, 4)] {
+        let style = sheet.cell(row, column).and_then(|cell| cell.style.as_ref()).expect("styled cell");
+        assert_eq!(style.bold, Some(true));
+        assert_eq!(style.fill.as_deref(), Some("#ffeeaa"));
+        assert_eq!(style.align.as_deref(), Some("center"));
+    }
+    crate::close(handle).expect("close");
+}
+
+#[test]
+fn duplicate_and_move_keep_sheet_names_unique() {
+    let created = crate::create(&json!({ "title": "Sheets" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "sheet.add", "name": "Notes" },
+                { "op": "cell.set", "sheet": "Notes", "reference": "A1", "value": "hi" },
+                { "op": "sheet.duplicate", "sheet": "Notes" },
+            ]
+        }),
+    )
+    .expect("edit");
+    let project = project_of(handle);
+    assert_eq!(
+        project.sheets.iter().map(|sheet| sheet.name.as_str()).collect::<Vec<_>>(),
+        vec!["Sheet1", "Notes", "Notes Copy"]
+    );
+    let copy = project.sheet("Notes Copy").expect("copy");
+    assert_ne!(copy.id, project.sheet("Notes").expect("source").id);
+    assert_eq!(copy.cell(1, 1).expect("A1").value, CellValue::text("hi"));
+
+    crate::edit(handle, &json!({ "operations": [{ "op": "sheet.move", "sheet": "Notes Copy", "index": 0 }] })).expect("move");
+    let project = project_of(handle);
+    assert_eq!(
+        project.sheets.iter().map(|sheet| sheet.name.as_str()).collect::<Vec<_>>(),
+        vec!["Notes Copy", "Sheet1", "Notes"]
+    );
+    assert_eq!(project.sheets.iter().map(|sheet| sheet.index).collect::<Vec<_>>(), vec![0, 1, 2]);
+
+    let conflict =
+        crate::edit(handle, &json!({ "operations": [{ "op": "sheet.duplicate", "sheet": "Notes", "name": "Sheet1" }] }))
+            .expect_err("duplicate name");
+    assert_eq!(conflict.code, "session/argument-invalid");
+    crate::close(handle).expect("close");
+}
+
+#[test]
+fn exports_write_evaluated_formula_values() {
+    let created = crate::create(&json!({ "title": "Cached" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "value": 2 },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A2", "formula": "=A1*3" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "B1", "formula": "=1/0" },
+            ]
+        }),
+    )
+    .expect("edit");
+
+    let csv_path = temp_path("cached", "csv");
+    crate::export(handle, "csv", &csv_path, true).expect("export csv");
+    let text = fs::read_to_string(&csv_path).expect("read csv");
+    assert!(text.starts_with("2,#DIV/0!\n6,\n"), "csv was `{text}`");
+    let reopened = crate::open(&csv_path).expect("reopen csv");
+    let csv_handle = reopened["handle"].as_u64().expect("handle");
+    let csv_sheet = project_of(csv_handle);
+    assert_eq!(csv_sheet.sheets[0].cell(2, 1).expect("A2").value, CellValue::number(6.0));
+    assert_eq!(csv_sheet.sheets[0].cell(1, 2).expect("B1").value, CellValue::text("#DIV/0!"));
+    crate::close(csv_handle).expect("close");
+
+    let json_path = temp_path("cached", "json");
+    crate::export(handle, "json", &json_path, true).expect("export json");
+    let projection: serde_json::Value = serde_json::from_slice(&fs::read(&json_path).expect("read json")).expect("parse json");
+    let cells = projection["sheets"][0]["cells"].as_array().expect("cells");
+    let formula_cell = cells.iter().find(|cell| cell["address"] == json!("A2")).expect("A2");
+    assert_eq!(formula_cell["formula"], json!("=A1*3"));
+    assert_eq!(formula_cell["value"], json!(6.0));
+
+    let xlsx_path = temp_path("cached", "xlsx");
+    crate::export(handle, "xlsx", &xlsx_path, true).expect("export xlsx");
+    let read = xlsx::read_project("cached.xlsx", &fs::read(&xlsx_path).expect("read xlsx"), "Cached").expect("read xlsx");
+    let sheet = &read.sheets[0];
+    assert_eq!(sheet.cell(2, 1).expect("A2").formula.as_deref(), Some("=A1*3"));
+    assert_eq!(sheet.cell(2, 1).expect("A2").cached, Some(CellValue::number(6.0)));
+    assert_eq!(sheet.cell(1, 2).expect("B1").cached, Some(CellValue::error("#DIV/0!")));
+
+    crate::close(handle).expect("close");
+    for path in [csv_path, json_path, xlsx_path] {
+        let _ = fs::remove_file(path);
+    }
+}
+
+#[test]
+fn old_project_json_without_computed_values_still_opens() {
+    let path = temp_path("legacy", "oexcel");
+    let legacy = json!({
+        "format": "open-excel/project",
+        "version": 0,
+        "title": "Legacy",
+        "sheets": [{
+            "id": "sheet-1",
+            "name": "Sheet1",
+            "index": 0,
+            "visibility": "visible",
+            "cells": [
+                { "reference": "A1", "row": 1, "column": 1, "value": { "kind": "number", "number": 4 } },
+                { "reference": "B1", "row": 1, "column": 2, "value": { "kind": "empty" }, "formula": "=A1*2" }
+            ]
+        }]
+    });
+    fs::write(&path, serde_json::to_vec(&legacy).expect("serialize")).expect("write legacy");
+    let opened = crate::open(&path).expect("open legacy");
+    let handle = opened["handle"].as_u64().expect("handle");
+    let detail = crate::cell(handle, &json!({ "address": "B1" })).expect("cell");
+    assert_eq!(detail["formula"], json!("=A1*2"));
+    assert_eq!(detail["value"], json!(8.0));
+    crate::close(handle).expect("close");
+    let _ = fs::remove_file(path);
+}

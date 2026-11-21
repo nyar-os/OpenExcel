@@ -263,6 +263,93 @@ fn json_projection(project: &Project) -> Value {
     })
 }
 
+/// Reads one cell of an open workbook with its evaluated value.
+pub fn cell(handle: u64, request: &Value) -> Result<Value, ServiceError> {
+    store::with(handle, |entry| -> Result<Value, ServiceError> {
+        let key = request.get("sheet").and_then(Value::as_str).unwrap_or("");
+        let sheet = if key.is_empty() { entry.project.primary_sheet() } else { entry.project.sheet(key) }
+            .ok_or_else(|| missing_sheet(key))?;
+        let address = request.get("address").and_then(Value::as_str).unwrap_or("").trim();
+        let (row, column) = reference::parse_reference(address)
+            .ok_or_else(|| ServiceError::argument(format!("`{address}` is not an A1 cell reference")))?;
+        Ok(match sheet.cell(row, column) {
+            Some(cell) => json!({
+                "sheet": sheet.name,
+                "address": cell.reference,
+                "kind": cell_kind(cell),
+                "formula": cell.formula,
+                "value": primitive(&eval::value_of(cell)),
+                "cached": cell.cached.as_ref().map(primitive).unwrap_or(Value::Null),
+            }),
+            None => json!({
+                "sheet": sheet.name,
+                "address": reference::format_reference(row, column),
+                "kind": "empty",
+                "formula": Value::Null,
+                "value": Value::Null,
+                "cached": Value::Null,
+            }),
+        })
+    })?
+}
+
+fn cell_kind(cell: &model::Cell) -> &'static str {
+    if cell.formula.is_some() {
+        return "formula";
+    }
+    match cell.value {
+        CellValue::Text { .. } => "text",
+        CellValue::Number { .. } => "number",
+        CellValue::Bool { .. } => "boolean",
+        CellValue::Error { .. } => "error",
+        CellValue::Empty => "empty",
+    }
+}
+
+/// Reads a rectangle of cells with their evaluated values, row by row.
+pub fn range(handle: u64, request: &Value) -> Result<Value, ServiceError> {
+    store::with(handle, |entry| -> Result<Value, ServiceError> {
+        let key = request.get("sheet").and_then(Value::as_str).unwrap_or("");
+        let sheet = if key.is_empty() { entry.project.primary_sheet() } else { entry.project.sheet(key) }
+            .ok_or_else(|| missing_sheet(key))?;
+        let text = request.get("range").and_then(Value::as_str).unwrap_or("");
+        let range = reference::parse_range(text)
+            .ok_or_else(|| ServiceError::argument(format!("`{text}` is not an A1 range such as `A1:C4`")))?;
+        if u64::from(range.rows()) * u64::from(range.columns()) > 100_000 {
+            return Err(ServiceError::argument("the requested range is too large to return in one response"));
+        }
+        let rows = (range.start_row..=range.end_row)
+            .map(|row| {
+                (range.start_column..=range.end_column)
+                    .map(|column| {
+                        let address = reference::format_reference(row, column);
+                        match sheet.cell(row, column) {
+                            Some(cell) => json!({
+                                "address": address,
+                                "value": primitive(&eval::value_of(cell)),
+                                "formula": cell.formula,
+                            }),
+                            None => json!({ "address": address, "value": Value::Null, "formula": Value::Null }),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({ "sheet": sheet.name, "range": range.reference(), "rows": rows }))
+    })?
+}
+
+/// Recomputes every formula of one open workbook.
+pub fn recalculate(handle: u64) -> Result<Value, ServiceError> {
+    store::with_mut(handle, |entry| {
+        let changed = eval::recalculate(&mut entry.project);
+        if changed > 0 {
+            entry.revision += 1;
+        }
+        json!({ "revision": entry.revision, "changed": changed })
+    })
+}
+
 fn primitive(value: &CellValue) -> Value {
     match value {
         CellValue::Text { text } => Value::String(text.clone()),
@@ -483,9 +570,202 @@ fn apply_operation(project: &mut Project, operation: &Value) -> Result<(), Servi
                 .ok_or_else(|| ServiceError::argument("`range.clear` needs an A1 range such as `A1:C4`"))?;
             sheet.clear_range(&range);
         }
+        "range.set" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let start = operation
+                .get("start")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_reference)
+                .ok_or_else(|| ServiceError::argument("`range.set` needs an A1 `start` such as `B2`"))?;
+            let rows = operation
+                .get("rows")
+                .and_then(Value::as_array)
+                .ok_or_else(|| ServiceError::argument("`range.set` needs a `rows` matrix"))?;
+            for (row_offset, row) in rows.iter().enumerate() {
+                let cells = row
+                    .as_array()
+                    .ok_or_else(|| ServiceError::argument("each `range.set` row must be an array of cell inputs"))?;
+                for (column_offset, input) in cells.iter().enumerate() {
+                    let row = start.0.checked_add(row_offset as u32).filter(|row| *row <= 1_048_576);
+                    let column = start.1.checked_add(column_offset as u32).filter(|column| *column <= 16_384);
+                    let (Some(row), Some(column)) = (row, column)
+                    else {
+                        return Err(ServiceError::argument("the `range.set` matrix leaves the sheet grid"));
+                    };
+                    let (value, formula) = range_cell_input(input)?;
+                    sheet.write_cell(row, column, value, formula, None);
+                }
+            }
+        }
+        "format.set" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let range = operation
+                .get("range")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`format.set` needs an A1 range such as `A1:C4`"))?;
+            let style = style_from_json(
+                operation.get("style").ok_or_else(|| ServiceError::argument("`format.set` needs a `style` object"))?,
+            )?;
+            for row in range.start_row..=range.end_row {
+                for column in range.start_column..=range.end_column {
+                    let mut cell = sheet.cell(row, column).cloned().unwrap_or_else(|| model::Cell {
+                        reference: reference::format_reference(row, column),
+                        row,
+                        column,
+                        value: CellValue::Empty,
+                        formula: None,
+                        cached: None,
+                        style: None,
+                        computed: None,
+                    });
+                    cell.style = Some(merge_style(cell.style.as_ref(), &style));
+                    sheet.set_cell(cell);
+                }
+            }
+        }
+        "sheet.duplicate" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;
+            let mut copy = project.sheets[index].clone();
+            copy.id = project.allocate_sheet_id();
+            let requested = operation.get("name").and_then(Value::as_str).map(str::trim).filter(|name| !name.is_empty());
+            copy.name = match requested {
+                Some(name) => {
+                    if project.sheets.iter().any(|sheet| sheet.name.eq_ignore_ascii_case(name)) {
+                        return Err(ServiceError::argument(format!("sheet `{name}` already exists")));
+                    }
+                    name.to_owned()
+                }
+                None => unique_sheet_name(project, &format!("{} Copy", copy.name)),
+            };
+            let insert = index + 1;
+            project.sheets.insert(insert, copy);
+            project.reindex();
+        }
+        "sheet.move" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;
+            let target = operation
+                .get("index")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| ServiceError::argument("`sheet.move` needs a zero-based `index`"))?
+                as usize;
+            let sheet = project.sheets.remove(index);
+            let target = target.min(project.sheets.len());
+            project.sheets.insert(target, sheet);
+            project.reindex();
+        }
         other => return Err(ServiceError::new("object/unsupported", format!("edit operation `{other}` is not supported"))),
     }
     Ok(())
+}
+
+/// Reads one `range.set` entry: a primitive literal or `{ formula, value? }`.
+fn range_cell_input(value: &Value) -> Result<(CellValue, Option<String>), ServiceError> {
+    match value {
+        Value::Null => Ok((CellValue::Empty, None)),
+        Value::String(text) => Ok((CellValue::text(text), None)),
+        Value::Number(number) => Ok((CellValue::number(number.as_f64().unwrap_or(0.0)), None)),
+        Value::Bool(value) => Ok((CellValue::boolean(*value), None)),
+        Value::Object(map) => {
+            let formula = map
+                .get("formula")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|formula| !formula.is_empty())
+                .map(|formula| if formula.starts_with('=') { formula.to_owned() } else { format!("={formula}") });
+            let value = match map.get("value") {
+                Some(Value::Null) | None => CellValue::Empty,
+                Some(raw) => value_from_json(raw)?,
+            };
+            if formula.is_none() && value.is_empty() {
+                return Err(ServiceError::argument("a `range.set` cell needs a `formula` or a `value`"));
+            }
+            Ok((value, formula))
+        }
+        _ => Err(ServiceError::argument(
+            "a `range.set` cell must be null, a number, a boolean, a string or an object with `formula` and `value`",
+        )),
+    }
+}
+
+fn style_from_json(value: &Value) -> Result<model::CellStyle, ServiceError> {
+    let object = value.as_object().ok_or_else(|| ServiceError::argument("`format.set` needs a `style` object"))?;
+    let style = model::CellStyle {
+        bold: optional_bool(object, "bold")?,
+        italic: optional_bool(object, "italic")?,
+        font_size: optional_f32(object, "fontSize")?,
+        font_color: optional_string(object, "fontColor")?,
+        fill: optional_string(object, "fill")?,
+        number_format: optional_string(object, "numberFormat")?,
+        align: optional_string(object, "align")?,
+        wrap: optional_bool(object, "wrap")?,
+    };
+    if style.is_empty() {
+        return Err(ServiceError::argument("`format.set` needs at least one style property"));
+    }
+    Ok(style)
+}
+
+fn optional_bool(object: &Map<String, Value>, key: &str) -> Result<Option<bool>, ServiceError> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(ServiceError::argument(format!("`{key}` must be a boolean"))),
+    }
+}
+
+fn optional_f32(object: &Map<String, Value>, key: &str) -> Result<Option<f32>, ServiceError> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_f64()
+            .filter(|value| *value > 0.0)
+            .map(|value| Some(value as f32))
+            .ok_or_else(|| ServiceError::argument(format!("`{key}` must be a positive number"))),
+        Some(_) => Err(ServiceError::argument(format!("`{key}` must be a positive number"))),
+    }
+}
+
+fn optional_string(object: &Map<String, Value>, key: &str) -> Result<Option<String>, ServiceError> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if !value.trim().is_empty() => Ok(Some(value.clone())),
+        Some(_) => Err(ServiceError::argument(format!("`{key}` must be a non-empty string"))),
+    }
+}
+
+/// Merges one incoming style over the style already on a cell.
+fn merge_style(existing: Option<&model::CellStyle>, incoming: &model::CellStyle) -> model::CellStyle {
+    let base = existing.cloned().unwrap_or_default();
+    model::CellStyle {
+        bold: incoming.bold.or(base.bold),
+        italic: incoming.italic.or(base.italic),
+        font_size: incoming.font_size.or(base.font_size),
+        font_color: incoming.font_color.clone().or(base.font_color),
+        fill: incoming.fill.clone().or(base.fill),
+        number_format: incoming.number_format.clone().or(base.number_format),
+        align: incoming.align.clone().or(base.align),
+        wrap: incoming.wrap.or(base.wrap),
+    }
+}
+
+/// Allocates a sheet name that no other sheet uses.
+fn unique_sheet_name(project: &Project, base: &str) -> String {
+    if project.sheets.iter().all(|sheet| !sheet.name.eq_ignore_ascii_case(base)) {
+        return base.to_owned();
+    }
+    let mut suffix = 2;
+    loop {
+        let candidate = format!("{base} {suffix}");
+        if project.sheets.iter().all(|sheet| !sheet.name.eq_ignore_ascii_case(&candidate)) {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 fn missing_sheet(key: &str) -> ServiceError {
