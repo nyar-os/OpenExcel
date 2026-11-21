@@ -243,7 +243,15 @@ fn sheet_xml(sheet: &Sheet, table: &StyleTable) -> String {
     let mut body = String::new();
     body.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
     body.push_str("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">");
-    if let Some(bounds) = sheet.bounds() {
+    let dimension = match (sheet.dimension, sheet.actual_range()) {
+        (Some(declared), Some(actual)) if declared.end_row >= actual.end_row && declared.end_column >= actual.end_column => {
+            Some(declared)
+        }
+        (_, Some(actual)) => Some(actual),
+        (Some(declared), None) => Some(declared),
+        (None, None) => None,
+    };
+    if let Some(bounds) = dimension {
         body.push_str(&format!("<dimension ref=\"{}\"/>", bounds.reference()));
     }
     body.push_str("<sheetViews><sheetView workbookViewId=\"0\">");
