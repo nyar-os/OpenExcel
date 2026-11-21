@@ -14,7 +14,17 @@ import { createCli } from '@wae/commander';
 
 import * as service from './service.js';
 import { runGui } from './gui.js';
-import type { EditOperation, ExportFormat, InspectCheck, InspectReport, OpenExcelCapabilities, Workbook } from './types.js';
+import type {
+    CellDetail,
+    EditOperation,
+    ExportFormat,
+    InspectCheck,
+    InspectReport,
+    OpenExcelCapabilities,
+    RangeMatrix,
+    RecalcReport,
+    Workbook,
+} from './types.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -72,6 +82,30 @@ function describeReport(report: InspectReport): string {
         lines.push(`  ${issue.severity} ${issue.code} ${issue.sheetId ?? '-'} ${issue.cell ?? '-'} ${issue.message}`);
     }
     return lines.join('\n');
+}
+
+function describeCell(detail: CellDetail): string {
+    const parts = [`${detail.sheet}!${detail.address} kind=${detail.kind}`];
+    if (detail.formula !== null) {
+        parts.push(`formula=${detail.formula}`);
+    }
+    parts.push(`value=${detail.value === null ? '(empty)' : String(detail.value)}`);
+    if (detail.cached !== null) {
+        parts.push(`cached=${String(detail.cached)}`);
+    }
+    return parts.join(' ');
+}
+
+function describeRange(matrix: RangeMatrix): string {
+    const lines = [`range ${matrix.sheet}!${matrix.range} rows=${matrix.rows.length}`];
+    for (const row of matrix.rows) {
+        lines.push(row.map((cell) => (cell.value === null ? '' : String(cell.value))).join('\t'));
+    }
+    return lines.join('\n');
+}
+
+function describeRecalc(report: RecalcReport): string {
+    return `recalc revision=${report.revision} changed=${report.changed}`;
 }
 
 function parseChecks(value: string | undefined): InspectCheck[] | undefined {
@@ -249,6 +283,70 @@ cli
             service.close(opened.handle);
         }
     });
+
+cli
+    .command('cell', 'cli.cmd.cell')
+    .option('--sheet <name>', 'cli.opt.sheet')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const address = options._?.[1];
+        if (address === undefined) {
+            ctx.fail('open-excel.cli.address-required', { message: 'an A1 cell address such as `B4` is required' });
+            return 2;
+        }
+        const opened = service.open(file);
+        try {
+            const detail = service.cell(opened.handle, { sheet: text(options, 'sheet'), address });
+            ctx.emitResult(detail, describeCell(detail));
+            return 0;
+        } finally {
+            service.close(opened.handle);
+        }
+    });
+
+cli
+    .command('range', 'cli.cmd.range')
+    .option('--sheet <name>', 'cli.opt.sheet')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const range = options._?.[1];
+        if (range === undefined) {
+            ctx.fail('open-excel.cli.range-required', { message: 'an A1 range such as `A1:C4` is required' });
+            return 2;
+        }
+        const opened = service.open(file);
+        try {
+            const matrix = service.range(opened.handle, { sheet: text(options, 'sheet'), range });
+            ctx.emitResult(matrix, describeRange(matrix));
+            return 0;
+        } finally {
+            service.close(opened.handle);
+        }
+    });
+
+cli.command('recalc', 'cli.cmd.recalc').actionCtx(async (options, _args, ctx) => {
+    const file = input(options);
+    if (file === undefined) {
+        ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+        return 2;
+    }
+    const opened = service.open(file);
+    try {
+        const report = service.recalc(opened.handle);
+        ctx.emitResult(report, describeRecalc(report));
+        return 0;
+    } finally {
+        service.close(opened.handle);
+    }
+});
 
 cli
     .command('export', 'cli.cmd.export')

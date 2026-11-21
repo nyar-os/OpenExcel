@@ -10,6 +10,8 @@ import { OpenExcelError } from './errors.js';
 import { formatFromPath, type WorkbookFormat, type WorkbookIntent } from './formats.js';
 import * as service from './service.js';
 import type {
+    CellDetail,
+    CellQuery,
     EditRequest,
     EditResult,
     ExportOptions,
@@ -18,6 +20,9 @@ import type {
     InspectReport,
     OpenExcelCapabilities,
     OpenExcelOptions,
+    RangeMatrix,
+    RangeQuery,
+    RecalcReport,
     SaveOptions,
     SaveReport,
     SvgRender,
@@ -129,6 +134,28 @@ export class OpenExcel {
         return service.edit(this.handleOf(workbook), request);
     }
 
+    /** Reads one cell of a tracked workbook with its evaluated value. */
+    async cell(workbook: Workbook | string, query: CellQuery): Promise<CellDetail> {
+        this.assertActive();
+        assertCellQuery(query);
+        return service.cell(this.handleOf(workbook), query);
+    }
+
+    /** Reads a rectangle of a tracked workbook, row by row. */
+    async range(workbook: Workbook | string, query: RangeQuery): Promise<RangeMatrix> {
+        this.assertActive();
+        if (query === undefined || typeof query.range !== 'string' || query.range.trim().length === 0) {
+            throw new OpenExcelError('session/argument-invalid', '`range` needs a non-empty A1 range such as `A1:C4`');
+        }
+        return service.range(this.handleOf(workbook), query);
+    }
+
+    /** Recomputes every formula of a tracked workbook. */
+    async recalc(workbook: Workbook | string): Promise<RecalcReport> {
+        this.assertActive();
+        return service.recalc(this.handleOf(workbook));
+    }
+
     /** Writes one tracked workbook to an exchange format. */
     async export(workbook: Workbook | string, options: ExportOptions): Promise<ExportReport> {
         this.assertActive();
@@ -201,6 +228,12 @@ function assertProjectPath(input: WorkbookInput): string {
         });
     }
     return input.path;
+}
+
+function assertCellQuery(query: CellQuery): void {
+    if (query === undefined || typeof query.address !== 'string' || query.address.trim().length === 0) {
+        throw new OpenExcelError('session/argument-invalid', '`cell` needs a non-empty A1 `address` such as `B4`');
+    }
 }
 
 function assertEditRequest(request: EditRequest): void {

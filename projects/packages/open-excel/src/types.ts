@@ -240,6 +240,75 @@ export type CellValueInput =
     | { readonly kind: 'error'; readonly code: string }
     | { readonly kind: 'empty' };
 
+/** JSON projection of one evaluated cell value. Errors keep their literal. */
+export type CellPrimitive = string | number | boolean | null;
+
+/** What one cell holds after evaluation. */
+export type CellKind = 'text' | 'number' | 'boolean' | 'error' | 'empty' | 'formula';
+
+/** Result of reading one cell. `value` is the evaluated result. */
+export interface CellDetail {
+    readonly sheet: string;
+    readonly address: CellAddress;
+    readonly kind: CellKind;
+    readonly formula: string | null;
+    /** Evaluated value: what a reader shows. */
+    readonly value: CellPrimitive;
+    /** Value the source workbook carried next to the formula, when it had one. */
+    readonly cached: CellPrimitive;
+}
+
+/** One cell of a range matrix. */
+export interface RangeCell {
+    readonly address: CellAddress;
+    readonly value: CellPrimitive;
+    readonly formula: string | null;
+}
+
+/** Result of reading a rectangle, row by row. */
+export interface RangeMatrix {
+    readonly sheet: string;
+    readonly range: string;
+    readonly rows: readonly (readonly RangeCell[])[];
+}
+
+/** Result of `Workbook.recalc()`. */
+export interface RecalcReport {
+    readonly revision: number;
+    /** Formula cells whose evaluated value changed. */
+    readonly changed: number;
+}
+
+/** Options of reading one cell. */
+export interface CellQuery {
+    /** Sheet name or id; the first visible sheet when omitted. */
+    readonly sheet?: string;
+    readonly address: CellAddress;
+}
+
+/** Options of reading one rectangle. */
+export interface RangeQuery {
+    /** Sheet name or id; the first visible sheet when omitted. */
+    readonly sheet?: string;
+    /** A1 range such as `A1:C4`. */
+    readonly range: string;
+}
+
+/** One `range.set` entry: a literal, `null` to clear, or a formula with an optional cached value. */
+export type CellInput = CellValueInput | { readonly formula: string; readonly value?: CellValueInput };
+
+/** Visual properties accepted by `format.set`. Omitted properties keep their current value. */
+export interface CellStyleInput {
+    readonly bold?: boolean;
+    readonly italic?: boolean;
+    readonly fontSize?: number;
+    readonly fontColor?: string;
+    readonly fill?: string;
+    readonly numberFormat?: string;
+    readonly align?: 'left' | 'center' | 'right' | 'justify' | 'distribute' | 'fill';
+    readonly wrap?: boolean;
+}
+
 /** One operation of `Workbook.edit()`. */
 export type EditOperation =
     | {
@@ -249,9 +318,19 @@ export type EditOperation =
           readonly value?: CellValueInput;
           readonly formula?: string;
       }
+    | {
+          readonly op: 'range.set';
+          readonly sheet: string;
+          /** Top-left cell of the matrix. */
+          readonly start: CellAddress;
+          readonly rows: readonly (readonly CellInput[])[];
+      }
+    | { readonly op: 'format.set'; readonly sheet: string; readonly range: string; readonly style: CellStyleInput }
     | { readonly op: 'sheet.add'; readonly name: string; readonly index?: number }
     | { readonly op: 'sheet.rename'; readonly sheet: string; readonly name: string }
     | { readonly op: 'sheet.remove'; readonly sheet: string }
+    | { readonly op: 'sheet.duplicate'; readonly sheet: string; readonly name?: string }
+    | { readonly op: 'sheet.move'; readonly sheet: string; readonly index: number }
     | { readonly op: 'range.clear'; readonly sheet: string; readonly range: string };
 
 /** Request of `Workbook.edit()`. */

@@ -9,6 +9,8 @@
 import { NotImplementedError, OpenExcelError, errorCodes, type OpenExcelErrorCode } from './errors.js';
 import { nativeBinding } from './native.js';
 import type {
+    CellDetail,
+    CellQuery,
     EditRequest,
     EditResult,
     ExportFormat,
@@ -16,6 +18,9 @@ import type {
     InspectCheck,
     InspectReport,
     OpenExcelCapabilities,
+    RangeMatrix,
+    RangeQuery,
+    RecalcReport,
     SaveReport,
     SvgRender,
     Workbook,
@@ -107,6 +112,21 @@ export function summary(handle: number): Workbook {
 /** Applies an edit request to one open workbook. */
 export function edit(handle: number, request: EditRequest): EditResult {
     return decode<EditResult>(() => binding('workbook.edit').workbook_edit(handle, JSON.stringify(request)));
+}
+
+/** Reads one cell with its evaluated value. */
+export function cell(handle: number, query: CellQuery): CellDetail {
+    return decode<CellDetail>(() => binding('workbook.cell').workbook_cell(handle, JSON.stringify(query)));
+}
+
+/** Reads a rectangle of cells with their evaluated values. */
+export function range(handle: number, query: RangeQuery): RangeMatrix {
+    return decode<RangeMatrix>(() => binding('workbook.range').workbook_range(handle, JSON.stringify(query)));
+}
+
+/** Recomputes every formula of one open workbook. */
+export function recalc(handle: number): RecalcReport {
+    return decode<RecalcReport>(() => binding('workbook.recalc').workbook_recalc(handle));
 }
 
 /** Renders one sheet of an open workbook as SVG. */
