@@ -39,7 +39,10 @@ graph LR
   and reports the exact function list through `capabilities()`.
 - Edits cells, sheets and ranges with revision-conflict detection, and renders a
   sheet grid as SVG. The CLI exposes cell edits, raw operation batches, range
-  sorting, cell styles and sheet add/rename/remove/duplicate/move.
+  sorting, cell styles, sheet add/rename/remove/duplicate/move, and whole-row or
+  whole-column insertion and deletion. Structural edits move merged ranges,
+  frozen panes, row heights, column widths and formula references with the
+  cells.
 - Classifies the whole workbook family: `xlsx`, `xlsm`, `xltx`, `xls`, `csv`,
   `tsv`, `ods`, `json`, `xml` and `pdf`.
 
@@ -76,6 +79,12 @@ open-excel format ledger.oexcel --range A1:C1 --bold --fill "#ffeeaa" --out ledg
 open-excel sheet ledger.oexcel --add Notes --out ledger.oexcel --overwrite
 open-excel sheet ledger.oexcel --rename Sheet1 --to Ledger --out ledger.oexcel --overwrite
 
+# Insert or delete whole rows and columns
+open-excel row ledger.oexcel --insert 3 --count 2 --out ledger.oexcel --overwrite
+open-excel row ledger.oexcel --delete 7 --out ledger.oexcel --overwrite
+open-excel column ledger.oexcel --insert B --out ledger.oexcel --overwrite
+open-excel column ledger.oexcel --delete 4 --count 2 --out ledger.oexcel --overwrite
+
 # Print the current summary, or save a copy
 open-excel summary ledger.oexcel
 open-excel save ledger.oexcel --out copy.oexcel
@@ -101,6 +110,45 @@ await excel.export(edited.workbook, { format: 'xlsx', target: 'ledger.xlsx', ove
 const rendered = await excel.render(edited.workbook, { sheet: 'Sheet1' });
 console.log(rendered.svg.startsWith('<svg'));
 ```
+
+## Structural edits
+
+`row.insert`, `row.delete`, `column.insert` and `column.delete` grow or shrink a
+sheet without leaving stale coordinates behind.
+
+- Rows are one-based everywhere: `row: 1` is the first row. Columns accept a
+  one-based number or a column letter such as `"B"`, matching `column.setWidth`.
+- `row.insert`/`column.insert` place `count` empty lines (default `1`) before the
+  given row or column. `row.delete`/`column.delete` remove `count` lines starting
+  there.
+- Cells keep their values, styles and formulas and nothing stays at the old
+  coordinate. Merged ranges that cross an insertion point grow, merges cut by a
+  deletion shrink, and a merge that would collapse to a single cell is dropped.
+  Frozen panes, row heights, column widths and the declared dimension follow the
+  same shift.
+- An edit is atomic: every operation is validated before anything is applied, so
+  a revision conflict or an out-of-range request leaves the workbook unchanged.
+  One edit advances `revision` once.
+- Requests that would truncate content are rejected with
+  `session/argument-invalid`; a row or column band is never silently clipped.
+
+Formula references move with the sheet. The engine scans formula text and
+rewrites only references that point at the edited sheet:
+
+- An unqualified reference moves when the formula lives on the edited sheet.
+  A reference qualified with the edited sheet name (`Sheet1!A2`,
+  `'My Sheet'!A2`) moves on every sheet. Unqualified references on other sheets
+  and references qualified to other sheets stay verbatim.
+- Absolute and mixed references keep their `$` markers. A range expands when an
+  insertion point falls inside it and clamps when a deletion cuts it. A single
+  reference whose target is deleted becomes `#REF!`, and so does a range with no
+  rows or columns left.
+- String literals, error literals, function names, defined names, whole-column
+  and whole-row ranges, external-workbook references and 3-D sheet spans are
+  recognized. A range whose two ends name different sheets is left unchanged
+  instead of being half-rewritten.
+- Moved formulas are re-evaluated and their cached results are cleared, so an
+  old value never stands in for the new references.
 
 ## Repo layout
 
