@@ -9,13 +9,17 @@
 import { NotImplementedError, OpenExcelError, errorCodes, type OpenExcelErrorCode } from './errors.js';
 import { nativeBinding } from './native.js';
 import type {
+    EditRequest,
+    EditResult,
     ExportFormat,
     ExportReport,
     InspectCheck,
     InspectReport,
     OpenExcelCapabilities,
     SaveReport,
+    SvgRender,
     Workbook,
+    WorkbookRenderOptions,
 } from './types.js';
 
 /** Result of creating or opening a workbook. */
@@ -93,6 +97,21 @@ export function inspect(handle: number, checks?: readonly InspectCheck[]): Inspe
             ? binding('workbook.inspect').workbook_inspect(handle)
             : binding('workbook.inspect').workbook_inspect(handle, JSON.stringify(checks)),
     );
+}
+
+/** Returns the summary of one open workbook. */
+export function summary(handle: number): Workbook {
+    return decode<Workbook>(() => binding('workbook.summary').workbook_summary(handle));
+}
+
+/** Applies an edit request to one open workbook. */
+export function edit(handle: number, request: EditRequest): EditResult {
+    return decode<EditResult>(() => binding('workbook.edit').workbook_edit(handle, JSON.stringify(request)));
+}
+
+/** Renders one sheet of an open workbook as SVG. */
+export function render(handle: number, options: WorkbookRenderOptions = {}): SvgRender {
+    return decode<SvgRender>(() => binding('workbook.render').workbook_render(handle, JSON.stringify(options)));
 }
 
 /** Writes one open workbook to an export target. */

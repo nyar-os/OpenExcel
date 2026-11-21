@@ -53,7 +53,7 @@ export type InspectCheck = 'formulas' | 'references' | 'cycles' | 'types' | 'ran
 export type RenderFormat = 'svg' | 'png' | 'pdf';
 
 /** Formats `Workbook.export()` can write. */
-export type ExportFormat = 'xlsx' | 'xlsm' | 'csv' | 'json' | 'pdf';
+export type ExportFormat = 'xlsx' | 'xlsm' | 'csv' | 'tsv' | 'json' | 'html' | 'pdf';
 
 /** What the installed engine can do per format. */
 export interface FormatCapability {
@@ -152,7 +152,7 @@ export interface InspectReport {
 
 /** Options of saving a native project (not an exchange format). */
 export interface SaveOptions {
-    readonly target?: string;
+    readonly target: string;
     readonly overwrite?: boolean;
 }
 
@@ -210,4 +210,59 @@ export interface RenderReport {
     readonly format: RenderFormat;
     readonly pages: readonly RenderPage[];
     readonly diagnostics: readonly WorkbookDiagnostic[];
+}
+
+/** Options of `Workbook.render()`. */
+export interface WorkbookRenderOptions {
+    readonly format?: RenderFormat;
+    /** Sheet id or name; the first visible sheet when omitted. */
+    readonly sheet?: string;
+}
+
+/** SVG result of rendering one sheet. */
+export interface SvgRender {
+    readonly revision: number;
+    readonly format: 'svg';
+    readonly sheet: string;
+    readonly sheetId: SheetId;
+    readonly svg: string;
+}
+
+/** Value accepted by `cell.set`. */
+export type CellValueInput =
+    | string
+    | number
+    | boolean
+    | null
+    | { readonly kind: 'text'; readonly text: string }
+    | { readonly kind: 'number'; readonly number: number }
+    | { readonly kind: 'bool'; readonly value: boolean }
+    | { readonly kind: 'error'; readonly code: string }
+    | { readonly kind: 'empty' };
+
+/** One operation of `Workbook.edit()`. */
+export type EditOperation =
+    | {
+          readonly op: 'cell.set';
+          readonly sheet: string;
+          readonly reference: CellAddress;
+          readonly value?: CellValueInput;
+          readonly formula?: string;
+      }
+    | { readonly op: 'sheet.add'; readonly name: string; readonly index?: number }
+    | { readonly op: 'sheet.rename'; readonly sheet: string; readonly name: string }
+    | { readonly op: 'sheet.remove'; readonly sheet: string }
+    | { readonly op: 'range.clear'; readonly sheet: string; readonly range: string };
+
+/** Request of `Workbook.edit()`. */
+export interface EditRequest {
+    /** Rejects the write when the workbook moved past this revision. */
+    readonly expectedRevision?: number;
+    readonly operations: readonly EditOperation[];
+}
+
+/** Result of one committed edit. */
+export interface EditResult {
+    readonly revision: number;
+    readonly workbook: Workbook;
 }

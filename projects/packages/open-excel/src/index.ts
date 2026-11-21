@@ -1,11 +1,11 @@
 /**
- * Declared workbook surface of `@wae/open-excel`.
+ * Workbook surface of `@wae/open-excel`.
  *
- * Everything here is a declared contract: the session, the workbook summary and
- * the format registry exist, while every capability rejects with
- * `capability/not-implemented` until the shared engine lands. Domain rules,
- * formula evaluation, pivot aggregation, rendering and spreadsheet exchange
- * belong upstream and are never re-implemented in this package.
+ * The session, workbook summary, format registry and the native-backed create,
+ * open, save, edit, inspect, export and SVG render operations live here. When
+ * the addon is absent every engine call rejects with
+ * `capability/not-implemented`; the capability matrix always states which
+ * formats and checks this build really supports.
  */
 
 export { OpenExcel } from './open-excel.js';

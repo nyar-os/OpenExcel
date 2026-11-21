@@ -18,6 +18,9 @@ export interface NativeBinding {
     workbook_open(path: string): string;
     workbook_save(handle: number, path: string, overwrite: boolean): string;
     workbook_inspect(handle: number, checksJson?: string): string;
+    workbook_summary(handle: number): string;
+    workbook_edit(handle: number, requestJson: string): string;
+    workbook_render(handle: number, requestJson?: string): string;
     workbook_export(handle: number, format: string, target: string, overwrite: boolean): string;
     workbook_close(handle: number): boolean;
     openGui(options?: { title?: string; contentDir?: string; width?: number; height?: number }): string;
