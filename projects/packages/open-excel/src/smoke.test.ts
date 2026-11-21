@@ -116,10 +116,22 @@ test('save, edit, export and render validate arguments before reaching the engin
         invalid,
     );
     await assert.rejects(excel.export(workbook, { format: 'csv', target: '' }), invalid);
+    await assert.rejects(excel.cell(workbook, { address: ' ' }), invalid);
+    await assert.rejects(excel.range(workbook, { range: '' }), invalid);
     await assert.rejects(
         excel.render(workbook, { format: 'png' }),
         (error: unknown) => error instanceof OpenExcelError && error.code === 'format/unsupported',
     );
+    await excel.dispose();
+});
+
+test('tracked reads reject unknown workbooks before reaching the engine', async () => {
+    const excel = new OpenExcel();
+    const workbook = { id: 'workbook-404', revision: 0, title: 'Fixture', sheets: [], cells: 0 } as unknown as Workbook;
+    const missing = (error: unknown) => error instanceof OpenExcelError && error.code === 'workbook/not-found';
+    await assert.rejects(excel.cell(workbook, { address: 'A1' }), missing);
+    await assert.rejects(excel.range(workbook, { range: 'A1:B2' }), missing);
+    await assert.rejects(excel.recalc(workbook), missing);
     await excel.dispose();
 });
 

@@ -9,6 +9,9 @@
             "save": "Write an open project back to a project file",
             "edit": "Set one cell of a project file and optionally save the result",
             "inspect": "Run formula, reference and range checks on a project file",
+            "cell": "Read one cell of a project file with its evaluated value",
+            "range": "Read a rectangle of cells with their evaluated values",
+            "recalc": "Recompute every formula of a project file",
             "export": "Export a project file to a spreadsheet format",
             "gui": "Open the OpenExcel Studio window"
         },
