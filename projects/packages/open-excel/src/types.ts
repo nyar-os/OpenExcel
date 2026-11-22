@@ -449,6 +449,17 @@ export type EditOperation =
           readonly start: CellAddress;
           readonly rows: readonly (readonly CellInput[])[];
       }
+    | {
+          /**
+           * Appends rows below the sheet's last populated row, starting at
+           * `start` (default `A1`). The first column is `start`'s column.
+           */
+          readonly op: 'range.append';
+          readonly sheet: string;
+          /** Top-left cell for the appended block; defaults to `A1`. */
+          readonly start?: CellAddress;
+          readonly rows: readonly (readonly CellInput[])[];
+      }
     | { readonly op: 'format.set'; readonly sheet: string; readonly range: string; readonly style: CellStyleInput }
     | {
           /** Removes values and formulas in `range` while every cell style stays in place. */

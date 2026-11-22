@@ -891,6 +891,42 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             }
             0
         }
+        "range.append" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let origin = operation
+                .get("start")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_reference)
+                .unwrap_or((1, 1));
+            let rows = operation
+                .get("rows")
+                .and_then(Value::as_array)
+                .ok_or_else(|| ServiceError::argument("`range.append` needs a `rows` matrix"))?;
+            let last_row = sheet
+                .cells
+                .iter()
+                .filter(|cell| !cell.value.is_empty() || cell.formula.is_some())
+                .map(|cell| cell.row)
+                .max();
+            let start_row = last_row.map_or(origin.0, |row| row + 1).max(origin.0);
+            for (row_offset, row) in rows.iter().enumerate() {
+                let cells = row
+                    .as_array()
+                    .ok_or_else(|| ServiceError::argument("each `range.append` row must be an array of cell inputs"))?;
+                for (column_offset, input) in cells.iter().enumerate() {
+                    let row = start_row.checked_add(row_offset as u32).filter(|row| *row <= 1_048_576);
+                    let column = origin.1.checked_add(column_offset as u32).filter(|column| *column <= 16_384);
+                    let (Some(row), Some(column)) = (row, column)
+                    else {
+                        return Err(ServiceError::argument("the `range.append` matrix leaves the sheet grid"));
+                    };
+                    let (value, formula) = range_cell_input(input)?;
+                    sheet.write_cell(row, column, value, formula, None);
+                }
+            }
+            0
+        }
         "format.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;

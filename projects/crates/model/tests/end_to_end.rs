@@ -409,6 +409,40 @@ fn format_clear_removes_styles_but_keeps_values() {
 }
 
 #[test]
+fn range_append_writes_below_the_last_populated_row() {
+    let created = open_excel_workbook::create(&json!({ "title": "Append" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["a", "b"], ["1", "2"]] },
+                { "op": "range.append", "sheet": "Sheet1", "rows": [["3", "4"]] },
+                { "op": "range.append", "sheet": "Sheet1", "start": "C1", "rows": [["x", "y"]] }
+            ]
+        }),
+    )
+    .expect("append rows");
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(3, 1).expect("A3").value, CellValue::text("3"));
+    assert_eq!(sheet.cell(3, 2).expect("B3").value, CellValue::text("4"));
+    assert_eq!(sheet.cell(4, 3).expect("C4").value, CellValue::text("x"));
+    assert_eq!(sheet.cell(4, 4).expect("D4").value, CellValue::text("y"));
+    assert_eq!(sheet.cell(3, 1).expect("A3").reference, "A3");
+
+    let error = open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.append", "sheet": "Sheet1" }] }),
+    )
+    .expect_err("rows are required");
+    assert_eq!(error.code, "session/argument-invalid");
+
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
 fn range_clear_contents_keeps_styles_and_formulas_elsewhere() {
     let created = open_excel_workbook::create(&json!({ "title": "Contents" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");
