@@ -75,6 +75,7 @@ open-excel edit ledger.oexcel --cell B2 --formula "=A1*2" --out ledger.oexcel --
 # Apply a batch of operations, sort a range, style cells, manage sheets
 open-excel edit ledger.oexcel --ops '[{"op":"cell.set","sheet":"Sheet1","reference":"A1","value":7}]'
 open-excel sort ledger.oexcel --range A1:C9 --column 3 --header --out ledger.oexcel --overwrite
+open-excel copy ledger.oexcel --range A1:C2 --to E1 --out ledger.oexcel --overwrite
 open-excel format ledger.oexcel --range A1:C1 --bold --fill "#ffeeaa" --out ledger.oexcel --overwrite
 open-excel sheet ledger.oexcel --add Notes --out ledger.oexcel --overwrite
 open-excel sheet ledger.oexcel --rename Sheet1 --to Ledger --out ledger.oexcel --overwrite
@@ -117,6 +118,16 @@ await excel.export(edited.workbook, { format: 'xlsx', target: 'ledger.xlsx', ove
 const rendered = await excel.render(edited.workbook, { sheet: 'Sheet1' });
 console.log(rendered.svg.startsWith('<svg'));
 ```
+
+## Range copy
+
+`range.copy` writes `range` into the rectangle anchored at `target` and keeps
+the source rectangle in place. Values, formula sources, cached results and
+styles are copied verbatim; relative references inside formulas are not
+rewritten. The source is snapshotted before the destination is written, so a
+source and target that overlap still follow copy semantics. Merged ranges that
+intersect either rectangle are rejected, as is a destination that leaves the
+sheet grid.
 
 ## Structural edits
 

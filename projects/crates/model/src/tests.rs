@@ -826,6 +826,160 @@ fn transpose_moves_cells_into_the_target_rectangle() {
 }
 
 #[test]
+fn range_copy_duplicates_values_formulas_and_styles() {
+    let created = crate::create(&json!({ "title": "Copy" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    ["a", "b"],
+                    [1, { "formula": "=1+2" }],
+                ] },
+                { "op": "format.set", "sheet": "Sheet1", "range": "A1:B1", "style": { "bold": true, "fill": "#ffeeaa" } },
+                { "op": "range.set", "sheet": "Sheet1", "start": "D1", "rows": [
+                    ["stale", "stale"],
+                    ["stale", "stale"],
+                ] },
+            ]
+        }),
+    )
+    .expect("seed");
+    assert_eq!(crate::summary(handle).expect("summary")["revision"], json!(1));
+
+    let edited = crate::edit(
+        handle,
+        &json!({
+            "operations": [{ "op": "range.copy", "sheet": "Sheet1", "range": "A1:B2", "target": "D1" }]
+        }),
+    )
+    .expect("copy");
+    assert_eq!(edited["revision"], json!(2), "one copy advances the revision once");
+    assert_eq!(edited["affected"], json!([{ "op": "range.copy", "sheet": "Sheet1", "range": "D1:E2" }]));
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 1).expect("A1").value, CellValue::text("a"), "the source keeps its value");
+    assert_eq!(sheet.cell(1, 2).expect("B1").value, CellValue::text("b"));
+    assert_eq!(sheet.cell(2, 1).expect("A2").value, CellValue::number(1.0));
+    assert_eq!(sheet.cell(2, 2).expect("B2").formula.as_deref(), Some("=1+2"));
+
+    assert_eq!(sheet.cell(1, 4).expect("D1").value, CellValue::text("a"));
+    assert_eq!(sheet.cell(1, 5).expect("E1").value, CellValue::text("b"));
+    assert_eq!(sheet.cell(2, 4).expect("D2").value, CellValue::number(1.0));
+    let copied_formula = sheet.cell(2, 5).expect("E2");
+    assert_eq!(copied_formula.formula.as_deref(), Some("=1+2"), "formula sources travel verbatim");
+    assert_eq!(copied_formula.computed, Some(CellValue::number(3.0)));
+    let style = sheet.cell(1, 5).and_then(|cell| cell.style.as_ref()).expect("E1 style");
+    assert_eq!(style.bold, Some(true));
+    assert_eq!(style.fill.as_deref(), Some("#ffeeaa"));
+
+    crate::close(handle).expect("close");
+}
+
+#[test]
+fn range_copy_uses_a_snapshot_for_overlaps_and_blanks() {
+    let created = crate::create(&json!({ "title": "CopyOverlap" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    [1, null],
+                    [3, 4],
+                ] },
+                { "op": "range.set", "sheet": "Sheet1", "start": "D1", "rows": [
+                    [9, 9],
+                    [9, 9],
+                ] },
+            ]
+        }),
+    )
+    .expect("seed");
+
+    // D1:E2 copies next to the source; the blank B1 clears the stale E1.
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [{ "op": "range.copy", "sheet": "Sheet1", "range": "A1:B2", "target": "D1" }]
+        }),
+    )
+    .expect("copy beside");
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 4).expect("D1").value, CellValue::number(1.0));
+    assert!(sheet.cell(1, 5).is_none(), "a blank source cell clears the destination");
+    assert_eq!(sheet.cell(2, 4).expect("D2").value, CellValue::number(3.0));
+    assert_eq!(sheet.cell(2, 5).expect("E2").value, CellValue::number(4.0));
+
+    // B1:C2 overlaps A1:B2; every written cell comes from the snapshot.
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [{ "op": "range.copy", "sheet": "Sheet1", "range": "A1:B2", "target": "B1" }]
+        }),
+    )
+    .expect("copy over the source");
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 1).expect("A1").value, CellValue::number(1.0));
+    assert_eq!(sheet.cell(2, 1).expect("A2").value, CellValue::number(3.0));
+    assert_eq!(sheet.cell(1, 2).expect("B1").value, CellValue::number(1.0));
+    assert!(sheet.cell(1, 3).is_none(), "the blank snapshot cell clears C1");
+    assert_eq!(sheet.cell(2, 2).expect("B2").value, CellValue::number(3.0));
+    assert_eq!(sheet.cell(2, 3).expect("C2").value, CellValue::number(4.0));
+
+    crate::close(handle).expect("close");
+}
+
+#[test]
+fn range_copy_rejects_out_of_grid_and_merged_ranges_without_changing_the_document() {
+    let created = crate::create(&json!({ "title": "CopyErrors" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [[1, 2], [3, 4]] },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "C1", "end": "D1", "merge": true },
+            ]
+        }),
+    )
+    .expect("seed");
+    let revision = crate::summary(handle).expect("summary")["revision"].clone();
+
+    for request in [
+        json!({ "operations": [{ "op": "range.copy", "sheet": "Sheet1", "range": "A1:B2", "target": "A1048576" }] }),
+        json!({ "operations": [{ "op": "range.copy", "sheet": "Sheet1", "range": "A1:B1", "target": "XFD1" }] }),
+        json!({ "operations": [{ "op": "range.copy", "sheet": "Sheet1", "range": "C1:D1", "target": "A10" }] }),
+        json!({ "operations": [{ "op": "range.copy", "sheet": "Sheet1", "range": "A1:B1", "target": "C1" }] }),
+        json!({ "operations": [{ "op": "range.copy", "sheet": "Sheet1", "range": "A1:B1" }] }),
+    ] {
+        let error = crate::edit(handle, &request).expect_err("invalid copy");
+        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(crate::summary(handle).expect("summary")["revision"], revision);
+    }
+
+    let error = crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "value": "changed" },
+                { "op": "range.copy", "sheet": "Sheet1", "range": "A1:B1", "target": "C1" },
+            ]
+        }),
+    )
+    .expect_err("a failing copy rolls back the batch");
+    assert_eq!(error.code, "session/argument-invalid");
+    let project = project_of(handle);
+    assert_eq!(project.sheet("Sheet1").expect("sheet").cell(1, 1).expect("A1").value, CellValue::number(1.0));
+    assert_eq!(crate::summary(handle).expect("summary")["revision"], revision);
+    crate::close(handle).expect("close");
+}
+
+#[test]
 fn pdf_export_writes_a_paginated_document() {
     let created = crate::create(&json!({ "title": "Report" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");
@@ -956,11 +1110,9 @@ fn sheet_freeze_uses_a_cell_boundary_and_survives_xlsx() {
     let read = xlsx::read_project("freeze.xlsx", &fs::read(&path).expect("read xlsx"), "Freeze").expect("read xlsx");
     assert_eq!(read.sheets[0].freeze, Some(Freeze { rows: 1, columns: 2 }));
 
-    let explicit = crate::edit(
-        handle,
-        &json!({ "operations": [{ "op": "sheet.freeze", "sheet": "Sheet1", "rows": 2, "columns": 1 }] }),
-    )
-    .expect("explicit rows and columns");
+    let explicit =
+        crate::edit(handle, &json!({ "operations": [{ "op": "sheet.freeze", "sheet": "Sheet1", "rows": 2, "columns": 1 }] }))
+            .expect("explicit rows and columns");
     assert_eq!(explicit["revision"], json!(3));
     assert_eq!(project_of(handle).sheet("Sheet1").expect("sheet").freeze, Some(Freeze { rows: 2, columns: 1 }));
 
@@ -1054,16 +1206,18 @@ fn sheet_visibility_values_round_trip_through_xlsx() {
 
     let path = temp_path("visibility", "xlsx");
     crate::export(handle, "xlsx", &path, true).expect("export xlsx");
-    let read =
-        xlsx::read_project("visibility.xlsx", &fs::read(&path).expect("read xlsx"), "Visibility").expect("read xlsx");
+    let read = xlsx::read_project("visibility.xlsx", &fs::read(&path).expect("read xlsx"), "Visibility").expect("read xlsx");
     assert_eq!(read.sheet("Sheet1").expect("sheet").visibility, SheetVisibility::Visible);
     assert_eq!(read.sheet("Hidden").expect("sheet").visibility, SheetVisibility::Hidden);
     assert_eq!(read.sheet("Deep").expect("sheet").visibility, SheetVisibility::VeryHidden);
 
-    crate::edit(handle, &json!({ "operations": [
+    crate::edit(
+        handle,
+        &json!({ "operations": [
         { "op": "sheet.setVisibility", "sheet": "Hidden", "visibility": "visible" },
         { "op": "sheet.setVisibility", "sheet": "Deep", "visibility": "visible" },
-    ] }))
+    ] }),
+    )
     .expect("restore visibility");
     crate::export(handle, "xlsx", &path, true).expect("export restored");
     let read = xlsx::read_project("restored.xlsx", &fs::read(&path).expect("read xlsx"), "Visibility").expect("read restored");
@@ -1078,9 +1232,12 @@ fn hiding_the_last_visible_sheet_is_rejected() {
     let created = crate::create(&json!({ "title": "Visible" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");
     crate::edit(handle, &json!({ "operations": [{ "op": "sheet.add", "name": "Data" }] })).expect("add");
-    crate::edit(handle, &json!({ "operations": [
+    crate::edit(
+        handle,
+        &json!({ "operations": [
         { "op": "sheet.setVisibility", "sheet": "Sheet1", "visibility": "hidden" },
-    ] }))
+    ] }),
+    )
     .expect("hide one of two sheets");
     let revision = crate::summary(handle).expect("summary")["revision"].clone();
 

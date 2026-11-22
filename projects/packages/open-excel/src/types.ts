@@ -354,10 +354,25 @@ export interface SheetVisibilityCommandOptions {
 
 /** One rectangle a range operation rewrote, as reported by `Workbook.edit()`. */
 export interface AffectedRange {
-    readonly op: 'range.sort' | 'range.fillSeries' | 'range.transpose';
+    readonly op: 'range.sort' | 'range.fillSeries' | 'range.transpose' | 'range.copy';
     readonly sheet: string;
     /** A1 rectangle such as `A1:A5`. */
     readonly range: string;
+}
+
+/**
+ * Copies `range` into the rectangle anchored at `target` and keeps the source.
+ * Values, formula sources, cached results and styles move verbatim, while
+ * relative references inside formulas are not rewritten. The source is
+ * snapshotted before writing, so overlapping source and target stay
+ * deterministic; merged ranges intersecting either rectangle are rejected.
+ */
+export interface RangeCopyOperation {
+    readonly op: 'range.copy';
+    readonly sheet: string;
+    readonly range: string;
+    /** Top-left cell of the destination rectangle. */
+    readonly target: CellAddress;
 }
 
 /** One operation of `Workbook.edit()`. */
@@ -520,6 +535,7 @@ export type EditOperation =
           /** Top-left cell of the destination rectangle. */
           readonly target: CellAddress;
       }
+    | RangeCopyOperation
     | { readonly op: 'range.clear'; readonly sheet: string; readonly range: string };
 
 /** Request of `Workbook.edit()`. */
