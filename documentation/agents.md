@@ -1,6 +1,10 @@
 # OpenExcel agent reference
 
-How an agent discovers capabilities, drives the `open-excel` CLI and speaks the edit-operation JSON shape. The CLI is the stable automation surface; the SDK exposes the same operations through `@wae/open-excel`.
+How an agent discovers capabilities, drives the `open-excel` CLI and composes the `@wae/open-excel` SDK. The CLI serves short, one-shot tasks (`create`, `open`, `summary`, `cell`, `range`, `inspect`, `export`); multi-step edits and data-driven batches belong in a TypeScript script built on `new OpenExcel()`.
+
+- **GUI** (`open-excel open <file>`, `open-excel gui`): humans inspect data, edit formulas and review formatting interactively.
+- **SDK**: batch writes, formula recalculation, inspection loops, rendering and save/reopen.
+- **Not delivered yet**: PNG/PDF renderers (PDF export is partial), `xlsm` export, images in PDF, and importing `xls`/`ods`/`xltx`/`xml`.
 
 ## Capability discovery
 
@@ -24,7 +28,7 @@ The bin is `open-excel` (`projects/packages/open-excel/dist/cli.js`). A project 
 | `open` | `open-excel open <file>` | none |
 | `summary` | `open-excel summary <file>` | none |
 | `save` | `open-excel save <file>` | `--out` (defaults to the input), `--overwrite` |
-| `edit` | `open-excel edit <file>` | `--sheet`, `--cell`, `--value`, `--formula`, `--ops`, `--out`, `--overwrite` |
+| `edit` | `open-excel edit <file>` | Compatibility only: prefer `excel.edit(book, { operations })`. Options: `--sheet`, `--cell`, `--value`, `--formula`, `--ops`, `--out`, `--overwrite` |
 | `sort` | `open-excel sort <file>` | `--sheet`, `--range`, `--column`, `--descending`, `--header`, `--out`, `--overwrite` |
 | `copy` | `open-excel copy <file>` | `--sheet`, `--range`, `--to`, `--out`, `--overwrite` |
 | `move` | `open-excel move <file>` | `--sheet`, `--range`, `--to`, `--out`, `--overwrite` |
@@ -69,6 +73,57 @@ JSON mode uses the `wae.cli-result/v0` envelope:
 { "schema": "wae.cli-result/v0", "ok": true, "data": { } }
 { "schema": "wae.cli-result/v0", "ok": false, "error": { "code": "document/revision-conflict", "message": "..." } }
 ```
+
+## Recommended workflows
+
+A short user-facing session starts with one command:
+
+```bash
+open-excel create --out ledger.oexcel --title Ledger --overwrite
+open-excel open ledger.oexcel
+```
+
+The range/layout/sheet subcommands remain for compatibility and existing callers. New agents should batch the same changes through the SDK, recalculate explicitly, inspect the result and reopen the saved project:
+
+```ts
+import { OpenExcel } from '@wae/open-excel';
+
+const excel = new OpenExcel({ locale: 'en' });
+const book = await excel.open({ path: 'ledger.xlsx' });
+
+// One atomic batch: seed rows, add formulas, style the header.
+await excel.edit(book, {
+    expectedRevision: book.revision,
+    operations: [
+        {
+            op: 'range.set',
+            sheet: 'Sheet1',
+            start: 'A1',
+            rows: [
+                ['Region', 'Q1', 'Q2', 'Total'],
+                ['North', '120', '140', '=B2+C2'],
+                ['South', '90', '110', '=B3+C3'],
+            ],
+        },
+        { op: 'format.set', sheet: 'Sheet1', range: 'A1:D1', style: { bold: true, fill: '#eef2ff' } },
+    ],
+});
+
+const recalc = await excel.recalc(book);
+const inspection = await excel.inspect(book, { checks: ['formulas', 'references', 'cycles'] });
+
+const xlsx = await excel.export(book, { format: 'xlsx', target: 'ledger-final.xlsx', overwrite: true });
+await excel.save(book, { target: 'ledger-final.oexcel', overwrite: true });
+await excel.dispose();
+
+// Reopen the native project instead of trusting the writer.
+const reopened = new OpenExcel();
+const again = await reopened.open({ path: 'ledger-final.oexcel' });
+console.log(recalc.changed, inspection.passed, xlsx.target, again.revision);
+await reopened.dispose();
+```
+
+`export` refuses to overwrite: delete the old file or choose a new target. `inspect` reports findings with stable codes and `passed`; treat `error` severity as a failed delivery.
 
 ## Edit operation shape
 
