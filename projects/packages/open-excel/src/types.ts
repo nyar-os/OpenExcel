@@ -451,6 +451,15 @@ export type EditOperation =
       }
     | { readonly op: 'format.set'; readonly sheet: string; readonly range: string; readonly style: CellStyleInput }
     | {
+          /** Copies the style of one cell onto every cell in `target`, values untouched. */
+          readonly op: 'format.copy';
+          readonly sheet: string;
+          /** One-cell source such as `B2`; it must already carry content or a style. */
+          readonly source: string;
+          /** A1 target range such as `B2:D8`. */
+          readonly target: string;
+      }
+    | {
           /** Merges `start:end` when `merge` is true and unmerges it otherwise. */
           readonly op: 'merge.set';
           readonly sheet: string;

@@ -310,6 +310,57 @@ fn range_and_format_edits_apply() {
 }
 
 #[test]
+fn format_copy_paints_the_source_style_over_a_range() {
+    let created = open_excel_workbook::create(&json!({ "title": "Paint" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["header", "value"]] },
+                { "op": "format.set", "sheet": "Sheet1", "range": "A1", "style": { "bold": true, "fill": "#112233" } }
+            ]
+        }),
+    )
+    .expect("seed");
+
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "format.copy", "sheet": "Sheet1", "source": "A1", "target": "B1:C3" }
+            ]
+        }),
+    )
+    .expect("copy format");
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    for (row, column) in [(1, 2), (1, 3), (3, 2), (3, 3)] {
+        let style = sheet.cell(row, column).and_then(|cell| cell.style.as_ref()).expect("painted cell");
+        assert_eq!(style.bold, Some(true));
+        assert_eq!(style.fill.as_deref(), Some("#112233"));
+    }
+    assert_eq!(sheet.cell(1, 2).expect("B1").value, CellValue::text("value"), "values stay untouched");
+
+    let missing = open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "format.copy", "sheet": "Sheet1", "source": "Z9", "target": "A1" }] }),
+    )
+    .expect_err("missing source cell");
+    assert_eq!(missing.code, "session/argument-invalid");
+
+    let wide = open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "format.copy", "sheet": "Sheet1", "source": "A1:B2", "target": "A1" }] }),
+    )
+    .expect_err("source must be one cell");
+    assert_eq!(wide.code, "session/argument-invalid");
+
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
 fn duplicate_and_move_keep_sheet_names_unique() {
     let created = open_excel_workbook::create(&json!({ "title": "Sheets" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");

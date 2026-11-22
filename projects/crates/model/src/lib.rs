@@ -897,6 +897,52 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             }
             0
         }
+        "format.copy" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let source = operation
+                .get("source")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .filter(|range| range.start_row == range.end_row && range.start_column == range.end_column)
+                .ok_or_else(|| {
+                    ServiceError::argument("`format.copy` needs a one-cell `source` such as `B2`")
+                })?;
+            let target = operation
+                .get("target")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`format.copy` needs an A1 `target` range such as `B2:D8`"))?;
+            let style = sheet
+                .cell(source.start_row, source.start_column)
+                .ok_or_else(|| {
+                    ServiceError::argument(format!(
+                        "`format.copy` found no cell at `{}` to copy formatting from",
+                        source.reference()
+                    ))
+                })?
+                .style
+                .clone()
+                .unwrap_or_default();
+            for row in target.start_row..=target.end_row {
+                for column in target.start_column..=target.end_column {
+                    let mut cell = sheet.cell(row, column).cloned().unwrap_or_else(|| model::Cell {
+                        reference: reference::format_reference(row, column),
+                        row,
+                        column,
+                        value: CellValue::Empty,
+                        formula: None,
+                        cached: None,
+                        style: None,
+                        computed: None,
+                        computed_state: None,
+                    });
+                    cell.style = if style.is_empty() { None } else { Some(style.clone()) };
+                    sheet.set_cell(cell);
+                }
+            }
+            0
+        }
         "merge.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
