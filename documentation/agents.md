@@ -98,6 +98,7 @@ JSON mode uses the `wae.cli-result/v0` envelope:
 | `range.fillSeries` | `sheet`, `range` | `start`, `step` | Fills a single row or column with a linear numeric series. |
 | `range.transpose` | `sheet`, `range`, `target` | — | Moves the block into the transposed rectangle and clears the source. |
 | `range.clear` | `sheet`, `range` | — | Removes every cell in the rectangle, including styles and formulas. |
+| `range.clearContents` | `sheet`, `range` | — | Removes values and formulas in the rectangle, keeping every cell style. |
 | `format.copy` | `sheet`, `source` (one cell), `target` | Copies the source cell's style onto every target cell, keeping values and formulas. |
 | `format.set` | `sheet`, `range`, `style` | — | Applies `bold`, `italic`, `fontSize`, `fontColor`, `fill`, `numberFormat`, `align`, `wrap`. |
 | `format.clear` | `sheet`, `range` | — | Removes every cell style in the rectangle, keeping values and formulas. |

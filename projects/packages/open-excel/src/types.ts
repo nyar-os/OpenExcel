@@ -451,6 +451,13 @@ export type EditOperation =
       }
     | { readonly op: 'format.set'; readonly sheet: string; readonly range: string; readonly style: CellStyleInput }
     | {
+          /** Removes values and formulas in `range` while every cell style stays in place. */
+          readonly op: 'range.clearContents';
+          readonly sheet: string;
+          /** A1 range such as `A1:C4`. */
+          readonly range: string;
+      }
+    | {
           /** Removes every cell style in `range`; values and formulas stay in place. */
           readonly op: 'format.clear';
           readonly sheet: string;

@@ -751,6 +751,30 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             sheet.clear_range(&range);
             0
         }
+        "range.clearContents" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let range = operation
+                .get("range")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`range.clearContents` needs an A1 range such as `A1:C4`"))?;
+            for row in range.start_row..=range.end_row {
+                for column in range.start_column..=range.end_column {
+                    if let Some(cell) = sheet.cell(row, column).cloned() {
+                        sheet.set_cell(model::Cell {
+                            value: CellValue::Empty,
+                            formula: None,
+                            cached: None,
+                            computed: None,
+                            computed_state: None,
+                            ..cell
+                        });
+                    }
+                }
+            }
+            0
+        }
         "range.sort" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let range = operation

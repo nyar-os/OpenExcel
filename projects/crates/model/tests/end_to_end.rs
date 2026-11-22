@@ -409,6 +409,50 @@ fn format_clear_removes_styles_but_keeps_values() {
 }
 
 #[test]
+fn range_clear_contents_keeps_styles_and_formulas_elsewhere() {
+    let created = open_excel_workbook::create(&json!({ "title": "Contents" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["1", "2"], ["3", "4", "5"]] },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "C1", "formula": "=A1+B1" },
+                { "op": "format.set", "sheet": "Sheet1", "range": "A1:B2", "style": { "bold": true, "fill": "#ffeeaa" } }
+            ]
+        }),
+    )
+    .expect("seed");
+
+    open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.clearContents", "sheet": "Sheet1", "range": "A1:B2" }] }),
+    )
+    .expect("clear contents");
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    for (row, column) in [(1, 1), (1, 2), (2, 1), (2, 2)] {
+        let cell = sheet.cell(row, column).expect("cell");
+        assert_eq!(cell.value, CellValue::Empty, "values are cleared");
+        assert!(cell.formula.is_none());
+        assert!(cell.style.as_ref().expect("style survives").bold == Some(true));
+    }
+    let formula = sheet.cell(1, 3).expect("C1");
+    assert_eq!(formula.formula.as_deref(), Some("=A1+B1"), "formulas outside the range survive");
+    assert_eq!(sheet.cell(2, 3).expect("C2").value, CellValue::text("5"));
+
+    let bad_range = open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.clearContents", "sheet": "Sheet1", "range": "nope" }] }),
+    )
+    .expect_err("invalid range");
+    assert_eq!(bad_range.code, "session/argument-invalid");
+
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
 fn duplicate_and_move_keep_sheet_names_unique() {
     let created = open_excel_workbook::create(&json!({ "title": "Sheets" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");
