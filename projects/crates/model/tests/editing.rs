@@ -206,7 +206,7 @@ fn inserting_rows_moves_cells_merges_freeze_layout_and_formulas() {
                 { "op": "cell.set", "sheet": "Sheet1", "reference": "A3", "value": 3 },
                 { "op": "cell.set", "sheet": "Sheet1", "reference": "B3", "formula": "=$A$3+A1" },
                 { "op": "merge.set", "sheet": "Sheet1", "start": "A5", "end": "B5", "merge": true },
-                { "op": "freeze.set", "sheet": "Sheet1", "row": 1, "column": 1 },
+                { "op": "sheet.freeze", "sheet": "Sheet1", "rows": 1, "columns": 1 },
                 { "op": "column.setWidth", "sheet": "Sheet1", "column": "A", "width": 24 },
                 { "op": "row.setHeight", "sheet": "Sheet1", "row": 2, "height": 30 },
             ]
@@ -261,7 +261,7 @@ fn deleting_rows_shrinks_merges_and_rewrites_references() {
                 { "op": "cell.set", "sheet": "Sheet1", "reference": "C1", "formula": "=A5" },
                 { "op": "merge.set", "sheet": "Sheet1", "start": "A3", "end": "B6", "merge": true },
                 { "op": "merge.set", "sheet": "Sheet1", "start": "D5", "end": "E5", "merge": true },
-                { "op": "freeze.set", "sheet": "Sheet1", "row": 3, "column": 0 },
+                { "op": "sheet.freeze", "sheet": "Sheet1", "rows": 3, "columns": 0 },
                 { "op": "row.setHeight", "sheet": "Sheet1", "row": 2, "height": 20 },
                 { "op": "row.setHeight", "sheet": "Sheet1", "row": 5, "height": 40 },
             ]
@@ -304,7 +304,7 @@ fn inserting_columns_moves_cells_widths_and_formulas() {
                 { "op": "cell.set", "sheet": "Sheet1", "reference": "C1", "value": 3 },
                 { "op": "cell.set", "sheet": "Sheet1", "reference": "B2", "formula": "=B1+$C$1" },
                 { "op": "merge.set", "sheet": "Sheet1", "start": "B2", "end": "C3", "merge": true },
-                { "op": "freeze.set", "sheet": "Sheet1", "row": 1, "column": 2 },
+                { "op": "sheet.freeze", "sheet": "Sheet1", "rows": 1, "columns": 2 },
                 { "op": "column.setWidth", "sheet": "Sheet1", "column": "B", "width": 20 },
                 { "op": "column.setWidth", "sheet": "Sheet1", "column": "D", "width": 12 },
                 { "op": "row.setHeight", "sheet": "Sheet1", "row": 1, "height": 30 },
@@ -357,7 +357,7 @@ fn deleting_columns_drops_merges_widths_and_marks_removed_references() {
                 { "op": "cell.set", "sheet": "Sheet1", "reference": "C1", "value": 3 },
                 { "op": "cell.set", "sheet": "Sheet1", "reference": "A2", "formula": "=A1+B1+C1" },
                 { "op": "merge.set", "sheet": "Sheet1", "start": "B1", "end": "C1", "merge": true },
-                { "op": "freeze.set", "sheet": "Sheet1", "row": 1, "column": 2 },
+                { "op": "sheet.freeze", "sheet": "Sheet1", "rows": 1, "columns": 2 },
                 { "op": "column.setWidth", "sheet": "Sheet1", "column": "B", "width": 20 },
                 { "op": "column.setWidth", "sheet": "Sheet1", "column": "D", "width": 12 },
             ]
@@ -421,7 +421,7 @@ fn a_failing_operation_leaves_the_workbook_unchanged() {
                 { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "value": 1 },
                 { "op": "cell.set", "sheet": "Sheet1", "reference": "A2", "value": 2 },
                 { "op": "merge.set", "sheet": "Sheet1", "start": "A3", "end": "A4", "merge": true },
-                { "op": "freeze.set", "sheet": "Sheet1", "row": 1, "column": 0 },
+                { "op": "sheet.freeze", "sheet": "Sheet1", "rows": 1, "columns": 0 },
             ]
         }),
     )

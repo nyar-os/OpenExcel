@@ -912,22 +912,65 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             }
             0
         }
-        "freeze.set" => {
+        "sheet.freeze" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
-            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
-            let row = operation
-                .get("row")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| ServiceError::argument("`freeze.set` needs a non-negative `row`"))?;
-            let column = operation
-                .get("column")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| ServiceError::argument("`freeze.set` needs a non-negative `column`"))?;
-            if row > 1_048_576 || column > 16_384 {
-                return Err(ServiceError::argument("the frozen pane leaves the sheet grid"));
+            let index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;
+            let count_of = |name: &str| -> Result<Option<u32>, ServiceError> {
+                match operation.get(name) {
+                    None | Some(Value::Null) => Ok(None),
+                    Some(value) => value
+                        .as_u64()
+                        .and_then(|value| u32::try_from(value).ok())
+                        .map(Some)
+                        .ok_or_else(|| ServiceError::argument(format!("`{name}` must be a non-negative integer"))),
+                }
+            };
+            let rows = count_of("rows")?;
+            let columns = count_of("columns")?;
+            let boundary = operation.get("cell").and_then(Value::as_str).map(str::trim).filter(|cell| !cell.is_empty());
+            let clear = operation.get("clear").and_then(Value::as_bool).unwrap_or(false);
+            if clear || (boundary.is_none() && rows.is_none() && columns.is_none()) {
+                project.sheets[index].freeze = None;
             }
-            sheet.freeze =
-                if row == 0 && column == 0 { None } else { Some(model::Freeze { columns: column as u32, rows: row as u32 }) };
+            else {
+                let (rows, columns) = match boundary {
+                    Some(cell) => {
+                        if rows.is_some() || columns.is_some() {
+                            return Err(ServiceError::argument(
+                                "`sheet.freeze` takes either a `cell` boundary or explicit `rows` and `columns`",
+                            ));
+                        }
+                        let (row, column) = reference::parse_reference(cell)
+                            .ok_or_else(|| ServiceError::argument(format!("`{cell}` is not an A1 cell reference")))?;
+                        (row - 1, column - 1)
+                    }
+                    None => {
+                        let rows = rows.ok_or_else(|| {
+                            ServiceError::argument("`sheet.freeze` needs `rows` and `columns` or a `cell` boundary")
+                        })?;
+                        let columns = columns.ok_or_else(|| {
+                            ServiceError::argument("`sheet.freeze` needs `rows` and `columns` or a `cell` boundary")
+                        })?;
+                        (rows, columns)
+                    }
+                };
+                let sheet = &project.sheets[index];
+                if rows > 1_048_576 || columns > 16_384 {
+                    return Err(ServiceError::argument("the frozen pane leaves the sheet grid"));
+                }
+                // A freeze band past the used rectangle would freeze empty space,
+                // so the boundary stays inside the rows and columns the sheet uses.
+                let used_rows = sheet.last_row();
+                let used_columns = sheet.last_column();
+                if (used_rows > 0 && rows > used_rows) || (used_columns > 0 && columns > used_columns) {
+                    return Err(ServiceError::argument(format!(
+                        "freezing {rows} rows and {columns} columns goes past the used range, which ends at row \
+                         {used_rows} and column {used_columns}"
+                    )));
+                }
+                project.sheets[index].freeze =
+                    if rows == 0 && columns == 0 { None } else { Some(model::Freeze { columns, rows }) };
+            }
             0
         }
         "column.setWidth" => {

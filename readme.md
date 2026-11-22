@@ -39,10 +39,10 @@ graph LR
   and reports the exact function list through `capabilities()`.
 - Edits cells, sheets and ranges with revision-conflict detection, and renders a
   sheet grid as SVG. The CLI exposes cell edits, raw operation batches, range
-  sorting, cell styles, sheet add/rename/remove/duplicate/move, and whole-row or
-  whole-column insertion and deletion. Structural edits move merged ranges,
-  frozen panes, row heights, column widths and formula references with the
-  cells.
+  sorting, cell styles, sheet add/rename/remove/duplicate/move/hide, frozen-pane
+  control and whole-row or whole-column insertion and deletion. Structural edits
+  move merged ranges, frozen panes, row heights, column widths and formula
+  references with the cells.
 - Classifies the whole workbook family: `xlsx`, `xlsm`, `xltx`, `xls`, `csv`,
   `tsv`, `ods`, `json`, `xml` and `pdf`.
 
@@ -78,6 +78,13 @@ open-excel sort ledger.oexcel --range A1:C9 --column 3 --header --out ledger.oex
 open-excel format ledger.oexcel --range A1:C1 --bold --fill "#ffeeaa" --out ledger.oexcel --overwrite
 open-excel sheet ledger.oexcel --add Notes --out ledger.oexcel --overwrite
 open-excel sheet ledger.oexcel --rename Sheet1 --to Ledger --out ledger.oexcel --overwrite
+open-excel sheet ledger.oexcel --hide Notes --out ledger.oexcel --overwrite
+open-excel sheet ledger.oexcel --show Notes --out ledger.oexcel --overwrite
+
+# Freeze the rows above and the columns left of C2, or clear the pane
+open-excel freeze ledger.oexcel --at C2 --out ledger.oexcel --overwrite
+open-excel freeze ledger.oexcel --rows 1 --columns 2 --out ledger.oexcel --overwrite
+open-excel freeze ledger.oexcel --clear --out ledger.oexcel --overwrite
 
 # Insert or delete whole rows and columns
 open-excel row ledger.oexcel --insert 3 --count 2 --out ledger.oexcel --overwrite
@@ -112,6 +119,12 @@ console.log(rendered.svg.startsWith('<svg'));
 ```
 
 ## Structural edits
+
+`sheet.freeze` takes either an A1 `cell` boundary or explicit non-negative
+`rows` and `columns` counts, and refuses a band that reaches past the used
+range; `clear: true` (or no boundary at all) removes the pane. `sheet.setVisibility`
+accepts `visible`, `hidden` and `veryHidden` and refuses to hide the last visible
+sheet.
 
 `row.insert`, `row.delete`, `column.insert` and `column.delete` grow or shrink a
 sheet without leaving stale coordinates behind.

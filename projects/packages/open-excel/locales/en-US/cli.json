@@ -13,7 +13,8 @@
             "layout": "Set column widths or row heights and optionally save the result",
             "row": "Insert or delete whole rows and optionally save the result",
             "column": "Insert or delete whole columns and optionally save the result",
-            "sheet": "Add, rename, remove, duplicate or move a sheet and optionally save the result",
+            "freeze": "Freeze rows and columns, or clear the frozen pane, and optionally save the result",
+            "sheet": "Add, rename, remove, duplicate, move or hide a sheet and optionally save the result",
             "inspect": "Run formula, reference and range checks on a project file",
             "cell": "Read one cell of a project file with its evaluated value",
             "range": "Read a rectangle of cells with their evaluated values",
@@ -63,7 +64,14 @@
             "duplicate": "Sheet to duplicate",
             "as": "Name of the duplicated sheet",
             "move": "Sheet to move",
-            "index": "Zero-based position the sheet moves to"
+            "index": "Zero-based position the sheet moves to",
+            "hide-sheet": "Sheet to hide",
+            "show-sheet": "Sheet to make visible again",
+            "very-hidden-sheet": "Sheet to hide from the sheet tab menu as well",
+            "at": "A1 cell that marks the freeze boundary, such as C2",
+            "rows": "Number of rows to keep frozen",
+            "columns": "Number of columns to keep frozen",
+            "clear": "Remove the frozen pane"
         }
     }
 }

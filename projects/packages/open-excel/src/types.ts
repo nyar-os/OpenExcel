@@ -332,6 +332,26 @@ export interface CellStyleInput {
 /** Sheet tab visibility accepted by `sheet.setVisibility`. */
 export type SheetVisibility = 'visible' | 'hidden' | 'veryHidden';
 
+/** Parsed options of the `freeze` command; exactly one mode applies. */
+export interface FreezeCommandOptions {
+    readonly sheet?: string;
+    /** A1 cell that marks the freeze boundary, such as `C2`. */
+    readonly at?: CellAddress;
+    /** Number of frozen rows when no `--at` cell is given. */
+    readonly rows?: number;
+    /** Number of frozen columns when no `--at` cell is given. */
+    readonly columns?: number;
+    /** Clear the frozen pane. */
+    readonly clear?: boolean;
+}
+
+/** Parsed options of the `sheet` visibility flags; exactly one name applies. */
+export interface SheetVisibilityCommandOptions {
+    readonly hide?: string;
+    readonly show?: string;
+    readonly veryHidden?: string;
+}
+
 /** One rectangle a range operation rewrote, as reported by `Workbook.edit()`. */
 export interface AffectedRange {
     readonly op: 'range.sort' | 'range.fillSeries' | 'range.transpose';
@@ -366,11 +386,22 @@ export type EditOperation =
           readonly merge: boolean;
       }
     | {
-          /** Freezes `row` rows and `column` columns; zero for both clears the pane. */
-          readonly op: 'freeze.set';
+          /**
+           * Freezes rows and columns of one sheet. A `cell` boundary such as `C2`
+           * freezes the rows above it and the columns left of it, so `C2` means
+           * `rows: 1` and `columns: 2`. Explicit `rows` and `columns` are counts.
+           * `clear: true`, or omitting every boundary, removes the frozen pane.
+           */
+          readonly op: 'sheet.freeze';
           readonly sheet: string;
-          readonly row: number;
-          readonly column: number;
+          /** A1 cell whose top-left corner is the freeze boundary. */
+          readonly cell?: CellAddress;
+          /** Number of frozen rows when no `cell` is given. */
+          readonly rows?: number;
+          /** Number of frozen columns when no `cell` is given. */
+          readonly columns?: number;
+          /** Removes the frozen pane. */
+          readonly clear?: boolean;
       }
     | {
           /** Sets one column width in Excel character units; `hidden` hides the column. */

@@ -20,11 +20,13 @@ import type {
     EditOperation,
     ExportFormat,
     FindResult,
+    FreezeCommandOptions,
     InspectCheck,
     InspectReport,
     OpenExcelCapabilities,
     RangeMatrix,
     RecalcReport,
+    SheetVisibilityCommandOptions,
     Workbook,
 } from './types.js';
 
@@ -666,6 +668,73 @@ cli
     });
 
 cli
+    .command('freeze', 'cli.cmd.freeze')
+    .option('--sheet <name>', 'cli.opt.sheet')
+    .option('--at <cell>', 'cli.opt.at')
+    .option('--rows <n>', 'cli.opt.rows')
+    .option('--columns <n>', 'cli.opt.columns')
+    .option('--clear', 'cli.opt.clear')
+    .option('--out <file>', 'cli.opt.out')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const rawRows = text(options, 'rows');
+        const rawColumns = text(options, 'columns');
+        const requested: FreezeCommandOptions = {
+            sheet: text(options, 'sheet'),
+            at: text(options, 'at'),
+            rows: rawRows === undefined ? undefined : Number(rawRows),
+            columns: rawColumns === undefined ? undefined : Number(rawColumns),
+            clear: flag(options, 'clear') || undefined,
+        };
+        const numeric = requested.rows !== undefined || requested.columns !== undefined;
+        if ([requested.at !== undefined, numeric, requested.clear === true].filter(Boolean).length !== 1) {
+            ctx.fail('open-excel.cli.freeze-action-required', {
+                message: 'exactly one of `--at <cell>`, `--rows <n> --columns <m>` or `--clear` is required',
+            });
+            return 2;
+        }
+        const sheet = requested.sheet ?? 'Sheet1';
+        let operation: EditOperation;
+        let label: string;
+        if (requested.clear === true) {
+            operation = { op: 'sheet.freeze', sheet, clear: true };
+            label = `cleared the freeze on ${sheet}`;
+        }
+        else if (requested.at !== undefined) {
+            operation = { op: 'sheet.freeze', sheet, cell: requested.at };
+            label = `froze ${sheet} at ${requested.at}`;
+        }
+        else {
+            const { rows, columns } = requested;
+            if (!Number.isInteger(rows) || (rows ?? 0) < 0 || !Number.isInteger(columns) || (columns ?? 0) < 0) {
+                ctx.fail('open-excel.cli.freeze-numbers-invalid', {
+                    message: '`--rows` and `--columns` must both be non-negative integers',
+                });
+                return 2;
+            }
+            operation = { op: 'sheet.freeze', sheet, rows: rows as number, columns: columns as number };
+            label = `froze ${rows} rows and ${columns} columns on ${sheet}`;
+        }
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const result = await excel.edit(workbook, { operations: [operation] });
+            const out = text(options, 'out');
+            if (out !== undefined) {
+                const saved = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
+                ctx.emitResult({ ...result, saved }, `${label} revision=${saved.revision} saved=${out}`);
+                return;
+            }
+            ctx.emitResult(result, `${label} revision=${result.revision}`);
+        });
+        return 0;
+    });
+
+cli
     .command('sheet', 'cli.cmd.sheet')
     .option('--add <name>', 'cli.opt.add')
     .option('--rename <name>', 'cli.opt.rename')
@@ -675,6 +744,9 @@ cli
     .option('--as <name>', 'cli.opt.as')
     .option('--move <name>', 'cli.opt.move')
     .option('--index <n>', 'cli.opt.index')
+    .option('--hide <name>', 'cli.opt.hide-sheet')
+    .option('--show <name>', 'cli.opt.show-sheet')
+    .option('--very-hidden <name>', 'cli.opt.very-hidden-sheet')
     .option('--out <file>', 'cli.opt.out')
     .option('--overwrite', 'cli.opt.overwrite')
     .actionCtx(async (options, _args, ctx) => {
@@ -688,10 +760,17 @@ cli
         const remove = text(options, 'remove');
         const duplicate = text(options, 'duplicate');
         const move = text(options, 'move');
-        const selected = [add, rename, remove, duplicate, move].filter((value) => value !== undefined);
+        const visibility: SheetVisibilityCommandOptions = {
+            hide: text(options, 'hide'),
+            show: text(options, 'show'),
+            veryHidden: text(options, 'very-hidden'),
+        };
+        const selected = [add, rename, remove, duplicate, move, visibility.hide, visibility.show, visibility.veryHidden]
+            .filter((value) => value !== undefined);
         if (selected.length !== 1) {
             ctx.fail('open-excel.cli.sheet-action-required', {
-                message: 'exactly one of `--add`, `--rename`, `--remove`, `--duplicate` or `--move` is required',
+                message:
+                    'exactly one of `--add`, `--rename`, `--remove`, `--duplicate`, `--move`, `--hide`, `--show` or `--very-hidden` is required',
             });
             return 2;
         }
@@ -722,6 +801,18 @@ cli
             }
             operation = { op: 'sheet.duplicate', sheet: duplicate, name };
             label = `duplicated ${duplicate} as ${name}`;
+        }
+        else if (visibility.hide !== undefined) {
+            operation = { op: 'sheet.setVisibility', sheet: visibility.hide, visibility: 'hidden' };
+            label = `hid ${visibility.hide}`;
+        }
+        else if (visibility.show !== undefined) {
+            operation = { op: 'sheet.setVisibility', sheet: visibility.show, visibility: 'visible' };
+            label = `showed ${visibility.show}`;
+        }
+        else if (visibility.veryHidden !== undefined) {
+            operation = { op: 'sheet.setVisibility', sheet: visibility.veryHidden, visibility: 'veryHidden' };
+            label = `very-hid ${visibility.veryHidden}`;
         }
         else {
             const rawIndex = text(options, 'index');

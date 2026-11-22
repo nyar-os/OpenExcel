@@ -9,7 +9,7 @@ use std::{
 use serde_json::json;
 
 use crate::{
-    model::{CellRange, CellStyle, CellValue, Freeze, Project, SheetColumn},
+    model::{CellRange, CellStyle, CellValue, Freeze, Project, SheetColumn, SheetVisibility},
     xlsx,
 };
 
@@ -493,7 +493,7 @@ fn merge_freeze_visibility_and_replace_text_edits_apply() {
                 { "op": "sheet.add", "name": "Data" },
                 { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["Alpha alpha ALPHA"], ["alpha ALPHA"]] },
                 { "op": "merge.set", "sheet": "Sheet1", "start": "C1", "end": "D2", "merge": true },
-                { "op": "freeze.set", "sheet": "Sheet1", "row": 1, "column": 1 },
+                { "op": "sheet.freeze", "sheet": "Sheet1", "rows": 1, "columns": 1 },
                 { "op": "sheet.setVisibility", "sheet": "Data", "visibility": "hidden" },
                 { "op": "cell.replaceText", "sheet": "Sheet1", "range": "A1:A1", "find": "alpha", "replace": "x" },
                 {
@@ -926,4 +926,189 @@ fn capabilities_list_the_real_formula_functions() {
     assert_eq!(matrix["exportTargets"]["pdf"], json!("partial"));
     assert_eq!(matrix["exportLimits"]["pdf"], json!(["style-approximated", "no-images"]));
     assert_eq!(matrix["renderers"]["pdf"], json!("unsupported"));
+}
+
+#[test]
+fn sheet_freeze_uses_a_cell_boundary_and_survives_xlsx() {
+    let created = crate::create(&json!({ "title": "Freeze" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    [1, 2, 3],
+                    [4, 5, 6],
+                    [7, 8, 9],
+                ] }
+            ]
+        }),
+    )
+    .expect("seed");
+
+    let frozen = crate::edit(handle, &json!({ "operations": [{ "op": "sheet.freeze", "sheet": "Sheet1", "cell": "C2" }] }))
+        .expect("freeze at C2");
+    assert_eq!(frozen["revision"], json!(2));
+    assert_eq!(project_of(handle).sheet("Sheet1").expect("sheet").freeze, Some(Freeze { rows: 1, columns: 2 }));
+
+    let path = temp_path("freeze", "xlsx");
+    crate::export(handle, "xlsx", &path, true).expect("export xlsx");
+    let read = xlsx::read_project("freeze.xlsx", &fs::read(&path).expect("read xlsx"), "Freeze").expect("read xlsx");
+    assert_eq!(read.sheets[0].freeze, Some(Freeze { rows: 1, columns: 2 }));
+
+    let explicit = crate::edit(
+        handle,
+        &json!({ "operations": [{ "op": "sheet.freeze", "sheet": "Sheet1", "rows": 2, "columns": 1 }] }),
+    )
+    .expect("explicit rows and columns");
+    assert_eq!(explicit["revision"], json!(3));
+    assert_eq!(project_of(handle).sheet("Sheet1").expect("sheet").freeze, Some(Freeze { rows: 2, columns: 1 }));
+
+    let cleared = crate::edit(handle, &json!({ "operations": [{ "op": "sheet.freeze", "sheet": "Sheet1", "clear": true }] }))
+        .expect("clear freeze");
+    assert_eq!(cleared["revision"], json!(4));
+    assert_eq!(project_of(handle).sheet("Sheet1").expect("sheet").freeze, None);
+
+    crate::export(handle, "xlsx", &path, true).expect("export cleared xlsx");
+    let read = xlsx::read_project("cleared.xlsx", &fs::read(&path).expect("read xlsx"), "Freeze").expect("read cleared");
+    assert_eq!(read.sheets[0].freeze, None);
+
+    let implicit = crate::edit(handle, &json!({ "operations": [{ "op": "sheet.freeze", "sheet": "Sheet1" }] }))
+        .expect("a request without boundaries clears the freeze");
+    assert_eq!(implicit["revision"], json!(5));
+    assert_eq!(project_of(handle).sheet("Sheet1").expect("sheet").freeze, None);
+
+    crate::close(handle).expect("close");
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn sheet_freeze_rejects_invalid_boundaries_without_changing_the_document() {
+    let created = crate::create(&json!({ "title": "FreezeErrors" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [[1, 2, 3], [4, 5, 6], [7, 8, 9]] }
+            ]
+        }),
+    )
+    .expect("seed");
+    let revision = crate::summary(handle).expect("summary")["revision"].clone();
+
+    for request in [
+        json!({ "operations": [{ "op": "sheet.freeze", "sheet": "Sheet1", "cell": "A0" }] }),
+        json!({ "operations": [{ "op": "sheet.freeze", "sheet": "Sheet1", "cell": "XFE1" }] }),
+        json!({ "operations": [{ "op": "sheet.freeze", "sheet": "Sheet1", "rows": 1_048_577, "columns": 0 }] }),
+        json!({ "operations": [{ "op": "sheet.freeze", "sheet": "Sheet1", "rows": 99, "columns": 1 }] }),
+        json!({ "operations": [{ "op": "sheet.freeze", "sheet": "Sheet1", "rows": 1 }] }),
+        json!({
+            "operations": [{ "op": "sheet.freeze", "sheet": "Sheet1", "cell": "C2", "rows": 1, "columns": 1 }]
+        }),
+    ] {
+        let error = crate::edit(handle, &request).expect_err("invalid freeze");
+        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(crate::summary(handle).expect("summary")["revision"], revision);
+    }
+
+    let error = crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "value": "changed" },
+                { "op": "sheet.freeze", "sheet": "Sheet1", "rows": 99, "columns": 1 },
+            ]
+        }),
+    )
+    .expect_err("a failing operation rolls back the batch");
+    assert_eq!(error.code, "session/argument-invalid");
+    let project = project_of(handle);
+    assert_eq!(project.sheet("Sheet1").expect("sheet").cell(1, 1).expect("A1").value, CellValue::number(1.0));
+    assert_eq!(project.sheet("Sheet1").expect("sheet").freeze, None);
+    assert_eq!(crate::summary(handle).expect("summary")["revision"], revision);
+    crate::close(handle).expect("close");
+}
+
+#[test]
+fn sheet_visibility_values_round_trip_through_xlsx() {
+    let created = crate::create(&json!({ "title": "Visibility" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "sheet.add", "name": "Hidden" },
+                { "op": "sheet.add", "name": "Deep" },
+                { "op": "sheet.setVisibility", "sheet": "Hidden", "visibility": "hidden" },
+                { "op": "sheet.setVisibility", "sheet": "Deep", "visibility": "veryHidden" },
+            ]
+        }),
+    )
+    .expect("set visibility");
+
+    let project = project_of(handle);
+    assert_eq!(project.sheet("Sheet1").expect("sheet").visibility, SheetVisibility::Visible);
+    assert_eq!(project.sheet("Hidden").expect("sheet").visibility, SheetVisibility::Hidden);
+    assert_eq!(project.sheet("Deep").expect("sheet").visibility, SheetVisibility::VeryHidden);
+
+    let path = temp_path("visibility", "xlsx");
+    crate::export(handle, "xlsx", &path, true).expect("export xlsx");
+    let read =
+        xlsx::read_project("visibility.xlsx", &fs::read(&path).expect("read xlsx"), "Visibility").expect("read xlsx");
+    assert_eq!(read.sheet("Sheet1").expect("sheet").visibility, SheetVisibility::Visible);
+    assert_eq!(read.sheet("Hidden").expect("sheet").visibility, SheetVisibility::Hidden);
+    assert_eq!(read.sheet("Deep").expect("sheet").visibility, SheetVisibility::VeryHidden);
+
+    crate::edit(handle, &json!({ "operations": [
+        { "op": "sheet.setVisibility", "sheet": "Hidden", "visibility": "visible" },
+        { "op": "sheet.setVisibility", "sheet": "Deep", "visibility": "visible" },
+    ] }))
+    .expect("restore visibility");
+    crate::export(handle, "xlsx", &path, true).expect("export restored");
+    let read = xlsx::read_project("restored.xlsx", &fs::read(&path).expect("read xlsx"), "Visibility").expect("read restored");
+    assert!(read.sheets.iter().all(|sheet| sheet.visibility == SheetVisibility::Visible));
+
+    crate::close(handle).expect("close");
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn hiding_the_last_visible_sheet_is_rejected() {
+    let created = crate::create(&json!({ "title": "Visible" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    crate::edit(handle, &json!({ "operations": [{ "op": "sheet.add", "name": "Data" }] })).expect("add");
+    crate::edit(handle, &json!({ "operations": [
+        { "op": "sheet.setVisibility", "sheet": "Sheet1", "visibility": "hidden" },
+    ] }))
+    .expect("hide one of two sheets");
+    let revision = crate::summary(handle).expect("summary")["revision"].clone();
+
+    for visibility in ["hidden", "veryHidden"] {
+        let error = crate::edit(
+            handle,
+            &json!({ "operations": [
+                { "op": "sheet.setVisibility", "sheet": "Data", "visibility": visibility },
+            ] }),
+        )
+        .expect_err("the last visible sheet cannot be hidden");
+        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(crate::summary(handle).expect("summary")["revision"], revision);
+    }
+    let project = project_of(handle);
+    assert_eq!(project.sheet("Data").expect("sheet").visibility, SheetVisibility::Visible);
+    assert_eq!(project.sheet("Sheet1").expect("sheet").visibility, SheetVisibility::Hidden);
+
+    let single = crate::create(&json!({ "title": "Single" })).expect("create");
+    let single_handle = single["handle"].as_u64().expect("handle");
+    let error = crate::edit(
+        single_handle,
+        &json!({ "operations": [{ "op": "sheet.setVisibility", "sheet": "Sheet1", "visibility": "hidden" }] }),
+    )
+    .expect_err("a single sheet cannot be hidden");
+    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(project_of(single_handle).sheet("Sheet1").expect("sheet").visibility, SheetVisibility::Visible);
+
+    crate::close(handle).expect("close");
+    crate::close(single_handle).expect("close");
 }
