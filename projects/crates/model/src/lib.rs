@@ -11,14 +11,17 @@ mod csv;
 mod error;
 mod eval;
 mod inspect;
-mod model;
+#[doc(hidden)]
+pub mod model;
 mod pdf;
 mod reference;
 mod render;
 mod shift;
-mod store;
+#[doc(hidden)]
+pub mod store;
 mod structure;
-mod xlsx;
+#[doc(hidden)]
+pub mod xlsx;
 
 use std::{
     fs,
@@ -1691,6 +1694,3 @@ fn publish_target(path: &Path) -> PathBuf {
         _ => PathBuf::from(".").join(path),
     }
 }
-
-#[cfg(test)]
-mod tests;

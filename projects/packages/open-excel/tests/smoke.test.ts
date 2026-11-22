@@ -11,9 +11,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { formatFromPath, formatInfo, OpenExcel, OpenExcelError, workbookFormats } from './index.js';
-import type { Workbook, WorkbookInput } from './index.js';
-import { nativeBinding } from './native.js';
+import { formatFromPath, formatInfo, OpenExcel, OpenExcelError, workbookFormats } from '../src/index.js';
+import type { Workbook, WorkbookInput } from '../src/index.js';
+import { nativeBinding } from '../src/native.js';
 
 const installed = (() => {
     try {
