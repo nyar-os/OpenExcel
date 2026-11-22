@@ -161,6 +161,7 @@ await reopened.dispose();
 | `merge.set` | `sheet`, `start`, `end`, `merge` | — | Merges or unmerges the rectangle. |
 | `sheet.freeze` | `sheet`, and `cell` or `rows`+`columns` or `clear` | — | Freezes rows/columns or clears the pane. `C2` means 1 row and 2 columns. |
 | `sheet.setVisibility` | `sheet`, `visibility` | — | `visible`, `hidden` or `veryHidden`; the last visible sheet cannot be hidden. |
+| `sheet.setAutoFilter` | `sheet`, `range` | — | Declares the sheet autofilter (an A1 range such as `A1:D20`); `null` clears it. |
 | `sheet.add` | `name` | `index` | Adds a sheet. |
 | `sheet.rename` | `sheet`, `name` | — | Renames a sheet. |
 | `sheet.remove` | `sheet` | — | Removes a sheet; the last sheet cannot be removed. |

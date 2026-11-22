@@ -1787,6 +1787,62 @@ fn sheet_freeze_rejects_invalid_boundaries_without_changing_the_document() {
 }
 
 #[test]
+fn sheet_autofilter_survives_xlsx_and_can_be_cleared() {
+    let created = open_excel_workbook::create(&json!({ "title": "Filter" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    ["Name", "Qty", "Price"],
+                    ["Pen", 2, 1.5],
+                    ["Book", 1, 12.0],
+                ] }
+            ]
+        }),
+    )
+    .expect("seed");
+
+    let filtered = open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "sheet.setAutoFilter", "sheet": "Sheet1", "range": "A1:C3" }] }),
+    )
+    .expect("set autofilter");
+    assert_eq!(filtered["revision"], json!(2));
+    assert_eq!(project_of(handle).sheet("Sheet1").expect("sheet").auto_filter, Some(CellRange::between(1, 1, 3, 3)));
+    let summary = open_excel_workbook::summary(handle).expect("summary");
+    assert_eq!(summary["sheets"][0]["autoFilter"], json!("A1:C3"));
+
+    let path = temp_path("autofilter", "xlsx");
+    open_excel_workbook::export(handle, "xlsx", &path, true).expect("export xlsx");
+    let read = xlsx::read_project("autofilter.xlsx", &fs::read(&path).expect("read xlsx"), "Filter").expect("read xlsx");
+    assert_eq!(read.sheets[0].auto_filter, Some(CellRange::between(1, 1, 3, 3)));
+
+    let cleared = open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "sheet.setAutoFilter", "sheet": "Sheet1", "range": null }] }),
+    )
+    .expect("clear autofilter");
+    assert_eq!(cleared["revision"], json!(3));
+    assert_eq!(project_of(handle).sheet("Sheet1").expect("sheet").auto_filter, None);
+
+    let revision = open_excel_workbook::summary(handle).expect("summary")["revision"].clone();
+    for range in [json!("not-a-range"), json!(42)] {
+        let error = open_excel_workbook::edit(
+            handle,
+            &json!({ "operations": [{ "op": "sheet.setAutoFilter", "sheet": "Sheet1", "range": range }] }),
+        )
+        .expect_err("invalid autofilter range");
+        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], revision);
+    }
+
+    open_excel_workbook::close(handle).expect("close");
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn sheet_visibility_values_round_trip_through_xlsx() {
     let created = open_excel_workbook::create(&json!({ "title": "Visibility" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");

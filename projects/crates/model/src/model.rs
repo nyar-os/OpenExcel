@@ -148,6 +148,9 @@ pub struct Sheet {
     /// Frozen pane.
     #[serde(default)]
     pub freeze: Option<Freeze>,
+    /// Range the sheet's autofilter covers, when one is declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_filter: Option<CellRange>,
 }
 
 impl Sheet {
@@ -164,6 +167,7 @@ impl Sheet {
             cells: Vec::new(),
             merged: Vec::new(),
             freeze: None,
+            auto_filter: None,
         }
     }
 

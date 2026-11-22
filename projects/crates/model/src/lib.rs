@@ -190,6 +190,7 @@ fn summary_json(handle: u64, entry: &store::Entry) -> Value {
             "name": sheet.name,
             "hidden": !sheet.visibility.is_visible(),
             "cells": sheet.non_empty_cells(),
+            "autoFilter": sheet.auto_filter.as_ref().map(CellRange::reference),
         })).collect::<Vec<_>>(),
         "cells": entry.project.cell_count(),
     })
@@ -738,6 +739,19 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                 return Err(ServiceError::argument("a workbook must keep at least one visible sheet"));
             }
             project.sheets[index].visibility = visibility;
+            0
+        }
+        "sheet.setAutoFilter" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let filter = match operation.get("range") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(text)) => Some(reference::parse_range(text).ok_or_else(|| {
+                    ServiceError::argument("`sheet.setAutoFilter` needs an A1 range such as `A1:D20`, or `null` to clear it")
+                })?),
+                Some(_) => return Err(ServiceError::argument("`range` must be an A1 range string or `null`")),
+            };
+            sheet.auto_filter = filter;
             0
         }
         "range.clear" => {

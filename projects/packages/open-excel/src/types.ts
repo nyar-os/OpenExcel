@@ -117,6 +117,8 @@ export interface SheetSummary {
     readonly hidden: boolean;
     /** Non-empty cells on this sheet. */
     readonly cells: number;
+    /** Declared autofilter range such as `A1:D20`, or `null` when there is none. */
+    readonly autoFilter: string | null;
 }
 
 /** One cell, used when a caller asks for a single address. */
@@ -529,6 +531,13 @@ export type EditOperation =
           readonly hidden?: boolean;
       }
     | { readonly op: 'sheet.setVisibility'; readonly sheet: string; readonly visibility: SheetVisibility }
+    | {
+          /** Declares the sheet autofilter range; `null` removes the autofilter. */
+          readonly op: 'sheet.setAutoFilter';
+          readonly sheet: string;
+          /** A1 range such as `A1:D20`, or `null` to clear it. */
+          readonly range: string | null;
+      }
     | {
           /**
            * Inserts `count` empty rows before `row`, moving cells, merged ranges,

@@ -70,6 +70,7 @@ pub fn project_from_workbook(workbook: XlsxWorkbook, title: impl Into<String>) -
                 .collect();
             projected.merged = sheet.merged.into_iter().map(range_from).collect();
             projected.freeze = sheet.freeze.map(|freeze| Freeze { columns: freeze.columns, rows: freeze.rows });
+            projected.auto_filter = sheet.auto_filter.map(range_from);
             projected.cells = sheet
                 .cells
                 .into_iter()
@@ -215,6 +216,7 @@ fn workbook_from_project(project: &Project) -> XlsxWorkbook {
                 .collect();
             written.merged = sheet.merged.iter().map(range_to).collect();
             written.freeze = sheet.freeze.map(|freeze| FreezePane { columns: freeze.columns, rows: freeze.rows });
+            written.auto_filter = sheet.auto_filter.as_ref().map(range_to);
             written.cells = sheet
                 .cells
                 .iter()

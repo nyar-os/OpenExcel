@@ -136,6 +136,7 @@ fn check_insert_rows(sheet: &Sheet, start: u32, count: u32) -> Result<(), Servic
         || sheet.merged.iter().any(|range| overflows(range.end_row))
         || sheet.rows.iter().any(|record| overflows(record.index))
         || sheet.dimension.is_some_and(|range| overflows(range.end_row))
+        || sheet.auto_filter.is_some_and(|range| overflows(range.end_row))
         || sheet.freeze.is_some_and(|freeze| start <= freeze.rows && freeze.rows + count > MAX_ROW)
     {
         return Err(ServiceError::argument(format!(
@@ -152,6 +153,7 @@ fn check_insert_columns(sheet: &Sheet, start: u32, count: u32) -> Result<(), Ser
         || sheet.merged.iter().any(|range| overflows(range.end_column))
         || sheet.columns.iter().any(|record| overflows(record.max))
         || sheet.dimension.is_some_and(|range| overflows(range.end_column))
+        || sheet.auto_filter.is_some_and(|range| overflows(range.end_column))
         || sheet.freeze.is_some_and(|freeze| start <= freeze.columns && freeze.columns + count > MAX_COLUMN)
     {
         return Err(ServiceError::argument(format!(
@@ -196,6 +198,14 @@ fn shift_rows(sheet: &mut Sheet, start: u32, count: u32) {
         }
         dimension.end_row += count;
     }
+    if let Some(filter) = &mut sheet.auto_filter
+        && filter.end_row >= start
+    {
+        if filter.start_row >= start {
+            filter.start_row += count;
+        }
+        filter.end_row += count;
+    }
 }
 
 /// Removes rows `start..=end` and shifts the rows below them up.
@@ -234,6 +244,10 @@ fn delete_rows_from(sheet: &mut Sheet, start: u32, end: u32) {
         sheet.dimension = delete_span((dimension.start_row, dimension.end_row), start, end)
             .map(|(start_row, end_row)| CellRange { start_row, end_row, ..dimension });
     }
+    if let Some(filter) = sheet.auto_filter {
+        sheet.auto_filter = delete_span((filter.start_row, filter.end_row), start, end)
+            .map(|(start_row, end_row)| CellRange { start_row, end_row, ..filter });
+    }
 }
 
 /// Shifts every column-bearing field right by `count`.
@@ -270,6 +284,14 @@ fn shift_columns(sheet: &mut Sheet, start: u32, count: u32) {
             dimension.start_column += count;
         }
         dimension.end_column += count;
+    }
+    if let Some(filter) = &mut sheet.auto_filter
+        && filter.end_column >= start
+    {
+        if filter.start_column >= start {
+            filter.start_column += count;
+        }
+        filter.end_column += count;
     }
 }
 
@@ -309,6 +331,10 @@ fn delete_columns_from(sheet: &mut Sheet, start: u32, end: u32) {
     if let Some(dimension) = sheet.dimension {
         sheet.dimension = delete_span((dimension.start_column, dimension.end_column), start, end)
             .map(|(start_column, end_column)| CellRange { start_column, end_column, ..dimension });
+    }
+    if let Some(filter) = sheet.auto_filter {
+        sheet.auto_filter = delete_span((filter.start_column, filter.end_column), start, end)
+            .map(|(start_column, end_column)| CellRange { start_column, end_column, ..filter });
     }
 }
 
