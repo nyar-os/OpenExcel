@@ -361,6 +361,54 @@ fn format_copy_paints_the_source_style_over_a_range() {
 }
 
 #[test]
+fn format_clear_removes_styles_but_keeps_values() {
+    let created = open_excel_workbook::create(&json!({ "title": "Clear" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["a", "b", "c"], ["d", "e", "f"], ["g", "h", "i"]] },
+                { "op": "format.set", "sheet": "Sheet1", "range": "A1:C3", "style": { "bold": true, "fill": "#112233" } }
+            ]
+        }),
+    )
+    .expect("seed");
+
+    open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "format.clear", "sheet": "Sheet1", "range": "A2:B3" }] }),
+    )
+    .expect("clear format");
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert!(sheet.cell(1, 1).expect("A1").style.as_ref().expect("A1 keeps style").bold == Some(true));
+    for (row, column) in [(2, 1), (2, 2), (3, 1), (3, 2)] {
+        let cell = sheet.cell(row, column).expect("cell");
+        assert!(cell.style.is_none(), "styles are cleared");
+        assert!(!matches!(cell.value, CellValue::Empty), "values survive");
+    }
+    assert_eq!(sheet.cell(2, 1).expect("A2").value, CellValue::text("d"));
+    assert!(sheet.cell(1, 3).expect("C1").style.as_ref().expect("C1 keeps style").bold == Some(true));
+
+    let missing_sheet = open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "format.clear", "sheet": "Missing", "range": "A1" }] }),
+    )
+    .expect_err("unknown sheet");
+    assert_eq!(missing_sheet.code, "object/not-found");
+    let bad_range = open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "format.clear", "sheet": "Sheet1", "range": "nope" }] }),
+    )
+    .expect_err("invalid range");
+    assert_eq!(bad_range.code, "session/argument-invalid");
+
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
 fn duplicate_and_move_keep_sheet_names_unique() {
     let created = open_excel_workbook::create(&json!({ "title": "Sheets" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");

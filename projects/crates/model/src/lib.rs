@@ -943,6 +943,23 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             }
             0
         }
+        "format.clear" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let range = operation
+                .get("range")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`format.clear` needs an A1 range such as `A1:C4`"))?;
+            for row in range.start_row..=range.end_row {
+                for column in range.start_column..=range.end_column {
+                    if let Some(cell) = sheet.cell(row, column).cloned() {
+                        sheet.set_cell(model::Cell { style: None, ..cell });
+                    }
+                }
+            }
+            0
+        }
         "merge.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;

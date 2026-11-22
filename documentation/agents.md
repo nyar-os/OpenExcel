@@ -100,6 +100,7 @@ JSON mode uses the `wae.cli-result/v0` envelope:
 | `range.clear` | `sheet`, `range` | — | Removes every cell in the rectangle, including styles and formulas. |
 | `format.copy` | `sheet`, `source` (one cell), `target` | Copies the source cell's style onto every target cell, keeping values and formulas. |
 | `format.set` | `sheet`, `range`, `style` | — | Applies `bold`, `italic`, `fontSize`, `fontColor`, `fill`, `numberFormat`, `align`, `wrap`. |
+| `format.clear` | `sheet`, `range` | — | Removes every cell style in the rectangle, keeping values and formulas. |
 | `merge.set` | `sheet`, `start`, `end`, `merge` | — | Merges or unmerges the rectangle. |
 | `sheet.freeze` | `sheet`, and `cell` or `rows`+`columns` or `clear` | — | Freezes rows/columns or clears the pane. `C2` means 1 row and 2 columns. |
 | `sheet.setVisibility` | `sheet`, `visibility` | — | `visible`, `hidden` or `veryHidden`; the last visible sheet cannot be hidden. |
