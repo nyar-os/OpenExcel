@@ -354,7 +354,14 @@ export interface SheetVisibilityCommandOptions {
 
 /** One rectangle a range operation rewrote, as reported by `Workbook.edit()`. */
 export interface AffectedRange {
-    readonly op: 'range.sort' | 'range.fillSeries' | 'range.transpose' | 'range.copy' | 'range.move' | 'range.swap';
+    readonly op:
+        | 'range.sort'
+        | 'range.fillSeries'
+        | 'range.transpose'
+        | 'range.copy'
+        | 'range.move'
+        | 'range.swap'
+        | 'range.flip';
     readonly sheet: string;
     /** A1 rectangle such as `A1:A5`. */
     readonly range: string;
@@ -404,6 +411,23 @@ export interface RangeSwapOperation {
     readonly range: string;
     /** Top-left cell of the second, equal-sized rectangle. */
     readonly target: CellAddress;
+}
+
+/**
+ * Mirrors `range` in place along `axis`.
+ *
+ * `horizontal` swaps columns left to right while rows keep their position;
+ * `vertical` swaps rows top to bottom while columns keep theirs. Cell contents,
+ * styles and formula sources travel verbatim, while relative references inside
+ * formulas are not rewritten. The rectangle is snapshotted before it is
+ * cleared; merged cells inside the rectangle are rejected.
+ */
+export interface RangeFlipOperation {
+    readonly op: 'range.flip';
+    readonly sheet: string;
+    readonly range: string;
+    /** `horizontal` mirrors columns; `vertical` mirrors rows. */
+    readonly axis: 'horizontal' | 'vertical';
 }
 
 /** One operation of `Workbook.edit()`. */
@@ -569,6 +593,7 @@ export type EditOperation =
     | RangeCopyOperation
     | RangeMoveOperation
     | RangeSwapOperation
+    | RangeFlipOperation
     | { readonly op: 'range.clear'; readonly sheet: string; readonly range: string };
 
 /** Request of `Workbook.edit()`. */

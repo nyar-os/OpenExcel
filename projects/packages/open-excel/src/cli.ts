@@ -483,6 +483,48 @@ cli
     });
 
 cli
+    .command('flip', 'cli.cmd.flip')
+    .option('--sheet <name>', 'cli.opt.sheet')
+    .option('--range <range>', 'cli.opt.range')
+    .option('--axis <axis>', 'cli.opt.axis')
+    .option('--out <file>', 'cli.opt.out')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const range = text(options, 'range');
+        if (range === undefined) {
+            ctx.fail('open-excel.cli.range-required', { message: '`--range <A1:C4>` is required' });
+            return 2;
+        }
+        const axis = text(options, 'axis');
+        if (axis !== 'horizontal' && axis !== 'vertical') {
+            ctx.fail('open-excel.cli.axis-required', { message: '`--axis <horizontal|vertical>` is required' });
+            return 2;
+        }
+        const sheet = text(options, 'sheet') ?? 'Sheet1';
+        const operation: EditOperation = { op: 'range.flip', sheet, range, axis };
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const result = await excel.edit(workbook, { operations: [operation] });
+            const out = text(options, 'out');
+            if (out !== undefined) {
+                const saved = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
+                ctx.emitResult(
+                    { ...result, saved },
+                    `flipped ${sheet}!${range} ${axis} revision=${saved.revision} saved=${out}`,
+                );
+                return;
+            }
+            ctx.emitResult(result, `flipped ${sheet}!${range} ${axis} revision=${result.revision}`);
+        });
+        return 0;
+    });
+
+cli
     .command('format', 'cli.cmd.format')
     .option('--sheet <name>', 'cli.opt.sheet')
     .option('--range <range>', 'cli.opt.range')

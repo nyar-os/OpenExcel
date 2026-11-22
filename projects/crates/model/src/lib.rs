@@ -833,6 +833,11 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             affected.push(range_effect(project, operation, "range.swap", &written));
             0
         }
+        "range.flip" => {
+            let written = flip_range(project, operation)?;
+            affected.push(range_effect(project, operation, "range.flip", &written));
+            0
+        }
         "range.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
@@ -1505,6 +1510,72 @@ fn swap_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
         range.end_row.max(destination.end_row),
         range.end_column.max(destination.end_column),
     ))
+}
+
+/// Mirrors a rectangle in place along `axis`.
+///
+/// `horizontal` swaps columns left to right while rows keep their position;
+/// `vertical` swaps rows top to bottom while columns keep theirs. Cell
+/// contents, styles and formula sources travel verbatim; relative references
+/// inside formulas are not rewritten. The rectangle is snapshotted before it is
+/// cleared, so every cell lands once. Merges are rejected because mirrored
+/// cells would lose their shape. The reported range is the flipped rectangle.
+fn flip_range(project: &mut Project, operation: &Value) -> Result<CellRange, ServiceError> {
+    let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+    let range = operation
+        .get("range")
+        .and_then(Value::as_str)
+        .and_then(reference::parse_range)
+        .ok_or_else(|| ServiceError::argument("`range.flip` needs an A1 range such as `A1:C3`"))?;
+    if !range.is_valid() || range.end_row > 1_048_576 || range.end_column > 16_384 {
+        return Err(ServiceError::argument(format!("flip range `{}` leaves the sheet grid", range.reference())));
+    }
+    let requested = operation
+        .get("axis")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|axis| !axis.is_empty())
+        .ok_or_else(|| ServiceError::argument("`range.flip` needs `axis` set to `horizontal` or `vertical`"))?;
+    let horizontal = match requested.to_ascii_lowercase().as_str() {
+        "horizontal" => true,
+        "vertical" => false,
+        _ => {
+            return Err(ServiceError::argument(format!(
+                "`{requested}` is not a flip axis; expected `horizontal` or `vertical`"
+            )));
+        }
+    };
+    let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+    if let Some(merged) = sheet.merged.iter().find(|merged| merged.overlaps(&range)) {
+        return Err(ServiceError::argument(format!("`range.flip` cannot flip merged range `{}`", merged.reference())));
+    }
+    if (horizontal && range.columns() == 1) || (!horizontal && range.rows() == 1) {
+        return Ok(range);
+    }
+    let matrix = (range.start_row..=range.end_row)
+        .map(|row| (range.start_column..=range.end_column).map(|column| sheet.cell(row, column).cloned()).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    sheet.clear_range(&range);
+    for (row_offset, row) in matrix.iter().enumerate() {
+        for (column_offset, cell) in row.iter().enumerate() {
+            let Some(cell) = cell.clone()
+            else {
+                continue;
+            };
+            let (row, column) = if horizontal {
+                (range.start_row + row_offset as u32, range.end_column - column_offset as u32)
+            }
+            else {
+                (range.end_row - row_offset as u32, range.start_column + column_offset as u32)
+            };
+            let mut moved = cell;
+            moved.row = row;
+            moved.column = column;
+            moved.reference = reference::format_reference(row, column);
+            sheet.set_cell(moved);
+        }
+    }
+    Ok(range)
 }
 
 /// Reads a finite numeric field of an operation.

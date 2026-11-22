@@ -1241,6 +1241,101 @@ fn range_swap_rejects_out_of_grid_and_merged_ranges_without_changing_the_documen
 }
 
 #[test]
+fn range_flip_mirrors_values_formulas_and_styles_in_place() {
+    let created = open_excel_workbook::create(&json!({ "title": "Flip" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    [1, 2, 3],
+                    [4, 5, { "formula": "=1+2" }],
+                ] },
+                { "op": "format.set", "sheet": "Sheet1", "range": "A1", "style": { "bold": true } },
+            ]
+        }),
+    )
+    .expect("seed");
+
+    let edited = open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [{ "op": "range.flip", "sheet": "Sheet1", "range": "A1:C2", "axis": "horizontal" }]
+        }),
+    )
+    .expect("flip horizontally");
+    assert_eq!(edited["affected"], json!([{ "op": "range.flip", "sheet": "Sheet1", "range": "A1:C2" }]));
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 1).expect("A1").value, CellValue::number(3.0));
+    assert_eq!(sheet.cell(1, 2).expect("B1").value, CellValue::number(2.0));
+    assert_eq!(sheet.cell(1, 3).expect("C1").value, CellValue::number(1.0));
+    let flipped_style = sheet.cell(1, 3).and_then(|cell| cell.style.as_ref()).expect("C1 style");
+    assert_eq!(flipped_style.bold, Some(true), "styles travel with their cells");
+    assert!(sheet.cell(1, 1).and_then(|cell| cell.style.as_ref()).is_none());
+    let formula = sheet.cell(2, 1).expect("A2");
+    assert_eq!(formula.formula.as_deref(), Some("=1+2"));
+    assert_eq!(formula.computed, Some(CellValue::number(3.0)));
+    assert_eq!(sheet.cell(2, 2).expect("B2").value, CellValue::number(5.0));
+    assert_eq!(sheet.cell(2, 3).expect("C2").value, CellValue::number(4.0));
+
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [{ "op": "range.flip", "sheet": "Sheet1", "range": "A1:C2", "axis": "vertical" }]
+        }),
+    )
+    .expect("flip vertically");
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 2).expect("B1").value, CellValue::number(5.0));
+    let formula = sheet.cell(1, 1).expect("A1");
+    assert_eq!(formula.formula.as_deref(), Some("=1+2"));
+    assert_eq!(formula.computed, Some(CellValue::number(3.0)));
+    assert_eq!(sheet.cell(1, 3).expect("C1").value, CellValue::number(4.0));
+    assert_eq!(sheet.cell(2, 1).expect("A2").value, CellValue::number(3.0));
+    assert_eq!(sheet.cell(2, 3).expect("C2").value, CellValue::number(1.0));
+    let flipped_style = sheet.cell(2, 3).and_then(|cell| cell.style.as_ref()).expect("C2 style");
+    assert_eq!(flipped_style.bold, Some(true), "styles follow their cells between rows");
+
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
+fn range_flip_rejects_invalid_axis_out_of_grid_and_merged_ranges() {
+    let created = open_excel_workbook::create(&json!({ "title": "FlipErrors" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [[1, 2], [3, 4]] },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "C1", "end": "D1", "merge": true },
+            ]
+        }),
+    )
+    .expect("seed");
+    let revision = open_excel_workbook::summary(handle).expect("summary")["revision"].clone();
+
+    for request in [
+        json!({ "operations": [{ "op": "range.flip", "sheet": "Sheet1", "range": "A1:B2" }] }),
+        json!({ "operations": [{ "op": "range.flip", "sheet": "Sheet1", "range": "A1:B2", "axis": "diagonal" }] }),
+        json!({ "operations": [{ "op": "range.flip", "sheet": "Sheet1", "range": "C1:D1", "axis": "horizontal" }] }),
+    ] {
+        let error = open_excel_workbook::edit(handle, &request).expect_err("invalid flip");
+        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], revision);
+    }
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 1).expect("A1").value, CellValue::number(1.0), "rejected flips keep the rectangle");
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
 fn pdf_export_writes_a_paginated_document() {
     let created = open_excel_workbook::create(&json!({ "title": "Report" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");
