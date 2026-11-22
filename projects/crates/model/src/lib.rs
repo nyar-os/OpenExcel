@@ -823,6 +823,11 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             affected.push(range_effect(project, operation, "range.copy", &written));
             0
         }
+        "range.move" => {
+            let written = move_range(project, operation)?;
+            affected.push(range_effect(project, operation, "range.move", &written));
+            0
+        }
         "range.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
@@ -1346,6 +1351,67 @@ fn copy_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
             copied.column = column;
             copied.reference = reference::format_reference(row, column);
             sheet.set_cell(copied);
+        }
+    }
+    Ok(destination)
+}
+
+/// Moves a rectangle into the rectangle anchored at `target`, clearing the source.
+///
+/// Cell contents, styles and formula sources travel verbatim; relative
+/// references inside formulas are not rewritten. The source is snapshotted
+/// before either rectangle is cleared, so overlapping source and target stay
+/// deterministic. Merges are rejected because moved cells would lose their
+/// shape.
+fn move_range(project: &mut Project, operation: &Value) -> Result<CellRange, ServiceError> {
+    let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+    let range = operation
+        .get("range")
+        .and_then(Value::as_str)
+        .and_then(reference::parse_range)
+        .ok_or_else(|| ServiceError::argument("`range.move` needs an A1 range such as `A1:C2`"))?;
+    if !range.is_valid() || range.end_row > 1_048_576 || range.end_column > 16_384 {
+        return Err(ServiceError::argument(format!("move range `{}` leaves the sheet grid", range.reference())));
+    }
+    let (target_row, target_column) = operation
+        .get("target")
+        .and_then(Value::as_str)
+        .and_then(reference::parse_reference)
+        .ok_or_else(|| ServiceError::argument("`range.move` needs an A1 `target` anchor such as `E1`"))?;
+    let end_row = target_row
+        .checked_add(range.rows() - 1)
+        .filter(|row| *row <= 1_048_576)
+        .ok_or_else(|| ServiceError::argument("the moved range leaves the sheet grid"))?;
+    let end_column = target_column
+        .checked_add(range.columns() - 1)
+        .filter(|column| *column <= 16_384)
+        .ok_or_else(|| ServiceError::argument("the moved range leaves the sheet grid"))?;
+    let destination = CellRange { start_row: target_row, end_row, start_column: target_column, end_column };
+    let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+    if let Some(merged) = sheet.merged.iter().find(|merged| merged.overlaps(&range) || merged.overlaps(&destination)) {
+        return Err(ServiceError::argument(format!("`range.move` cannot move merged range `{}`", merged.reference())));
+    }
+    if destination == range {
+        return Ok(destination);
+    }
+    let matrix = (range.start_row..=range.end_row)
+        .map(|row| (range.start_column..=range.end_column).map(|column| sheet.cell(row, column).cloned()).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    sheet.clear_range(&destination);
+    sheet.clear_range(&range);
+    for (row_offset, row) in matrix.iter().enumerate() {
+        for (column_offset, cell) in row.iter().enumerate() {
+            let Some(cell) = cell.clone()
+            else {
+                continue;
+            };
+            let row = destination.start_row + row_offset as u32;
+            let column = destination.start_column + column_offset as u32;
+            let mut moved = cell;
+            moved.row = row;
+            moved.column = column;
+            moved.reference = reference::format_reference(row, column);
+            sheet.set_cell(moved);
         }
     }
     Ok(destination)

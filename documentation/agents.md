@@ -27,6 +27,7 @@ The bin is `open-excel` (`projects/packages/open-excel/dist/cli.js`). A project 
 | `edit` | `open-excel edit <file>` | `--sheet`, `--cell`, `--value`, `--formula`, `--ops`, `--out`, `--overwrite` |
 | `sort` | `open-excel sort <file>` | `--sheet`, `--range`, `--column`, `--descending`, `--header`, `--out`, `--overwrite` |
 | `copy` | `open-excel copy <file>` | `--sheet`, `--range`, `--to`, `--out`, `--overwrite` |
+| `move` | `open-excel move <file>` | `--sheet`, `--range`, `--to`, `--out`, `--overwrite` |
 | `format` | `open-excel format <file>` | `--sheet`, `--range`, `--bold`, `--italic`, `--font-size`, `--font-color`, `--fill`, `--number-format`, `--align`, `--wrap`, `--out`, `--overwrite` |
 | `layout` | `open-excel layout <file>` | `--sheet`, `--column`, `--width`, `--row`, `--height`, `--hide`, `--out`, `--overwrite` |
 | `row` | `open-excel row <file>` | `--sheet`, `--insert <n>` or `--delete <n>`, `--count`, `--out`, `--overwrite` |
@@ -43,7 +44,7 @@ The bin is `open-excel` (`projects/packages/open-excel/dist/cli.js`). A project 
 
 Notes:
 
-- Mutating commands (`edit`, `sort`, `copy`, `format`, `layout`, `row`, `column`, `freeze`, `sheet`) only persist when `--out` is given. Without `--out` the change exists only in the opened handle and is lost when the process exits.
+- Mutating commands (`edit`, `sort`, `copy`, `move`, `format`, `layout`, `row`, `column`, `freeze`, `sheet`) only persist when `--out` is given. Without `--out` the change exists only in the opened handle and is lost when the process exits.
 - `--sheet` defaults to `Sheet1`. Addresses are A1-style: `B4`, `A1:C4`.
 - `--column` for `sort` is a one-based offset inside `--range`, or an absolute column letter.
 - `edit --ops` cannot be combined with `--cell`, `--value` or `--formula`.
@@ -87,6 +88,7 @@ JSON mode uses the `wae.cli-result/v0` envelope:
 | `cell.set` | `sheet`, `reference`, and `value` or `formula` | — | Writes one cell. A formula may start with or omit `=`. |
 | `range.set` | `sheet`, `start`, `rows` | — | Writes a matrix of literals, formulas or `null` to clear. |
 | `range.copy` | `sheet`, `range`, `target` | — | Copies into the rectangle anchored at `target` and keeps the source. |
+| `range.move` | `sheet`, `range`, `target` | — | Moves into the rectangle anchored at `target` and clears the source. |
 | `range.sort` | `sheet`, `range`, `column` | `ascending`, `hasHeader` | Sorts whole rows; formulas move with their row. |
 | `range.fillSeries` | `sheet`, `range` | `start`, `step` | Fills a single row or column with a linear numeric series. |
 | `range.transpose` | `sheet`, `range`, `target` | — | Moves the block into the transposed rectangle and clears the source. |
@@ -153,6 +155,7 @@ CLI usage failures add `open-excel.cli.*` codes such as `open-excel.cli.file-req
 - Supported imports: `.oexcel`, `.xlsx`, `.xlsm`, `.csv`, `.tsv`. `.xlsm` imports but does not export.
 - Export targets: `xlsx`, `csv`, `tsv`, `json`, `html`, `pdf`. CSV, TSV, JSON and HTML write the primary sheet only and report every other sheet as a loss. PDF is partial (`style-approximated`, `no-images`).
 - `range.copy` copies values, formula sources, cached results and styles verbatim; relative references inside formulas are not rewritten. A merged range touching the source or destination is rejected.
+- `range.move` snapshots the block, clears both rectangles, then writes the snapshot, so an overlapping destination is deterministic. A merged range touching either rectangle is rejected.
 - `range.transpose` moves the block, clears the source and rejects a destination that overlaps it or touches a merged range.
 - `range.fillSeries` needs exactly one row or one column; merged ranges in the way are rejected.
 - `range.sort` sorts numbers before text, text before booleans, and leaves blanks trailing; it refuses ranges that overlap a merged range.

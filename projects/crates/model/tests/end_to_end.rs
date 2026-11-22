@@ -995,6 +995,131 @@ fn range_copy_rejects_out_of_grid_and_merged_ranges_without_changing_the_documen
 }
 
 #[test]
+fn range_move_moves_values_formulas_and_styles_and_clears_the_source() {
+    let created = open_excel_workbook::create(&json!({ "title": "Move" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    ["a", "b"],
+                    [1, { "formula": "=1+2" }],
+                ] },
+                { "op": "format.set", "sheet": "Sheet1", "range": "A1:B1", "style": { "bold": true, "fill": "#ffeeaa" } },
+                { "op": "range.set", "sheet": "Sheet1", "start": "D1", "rows": [
+                    ["stale", "stale"],
+                    ["stale", "stale"],
+                ] },
+            ]
+        }),
+    )
+    .expect("seed");
+    let revision = open_excel_workbook::summary(handle).expect("summary")["revision"].as_u64().expect("revision");
+
+    let edited = open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [{ "op": "range.move", "sheet": "Sheet1", "range": "A1:B2", "target": "D1" }]
+        }),
+    )
+    .expect("move");
+    assert_eq!(edited["revision"], json!(revision + 1), "one move advances the revision once");
+    assert_eq!(edited["affected"], json!([{ "op": "range.move", "sheet": "Sheet1", "range": "D1:E2" }]));
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert!(sheet.cell(1, 1).is_none(), "A1 is cleared");
+    assert!(sheet.cell(1, 2).is_none(), "B1 is cleared");
+    assert!(sheet.cell(2, 1).is_none(), "A2 is cleared");
+    assert!(sheet.cell(2, 2).is_none(), "B2 is cleared");
+
+    assert_eq!(sheet.cell(1, 4).expect("D1").value, CellValue::text("a"));
+    assert_eq!(sheet.cell(1, 5).expect("E1").value, CellValue::text("b"));
+    assert_eq!(sheet.cell(2, 4).expect("D2").value, CellValue::number(1.0));
+    let moved_formula = sheet.cell(2, 5).expect("E2");
+    assert_eq!(moved_formula.formula.as_deref(), Some("=1+2"), "formula sources travel verbatim");
+    assert_eq!(moved_formula.computed, Some(CellValue::number(3.0)));
+    let style = sheet.cell(1, 5).and_then(|cell| cell.style.as_ref()).expect("E1 style");
+    assert_eq!(style.bold, Some(true));
+    assert_eq!(style.fill.as_deref(), Some("#ffeeaa"));
+
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
+fn range_move_uses_a_snapshot_for_overlaps_and_blank_cells() {
+    let created = open_excel_workbook::create(&json!({ "title": "MoveOverlap" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    [1, null],
+                    [3, 4],
+                ] },
+            ]
+        }),
+    )
+    .expect("seed");
+
+    // B1:C2 overlaps A1:B2; every written cell comes from the snapshot and the
+    // source clears afterwards.
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [{ "op": "range.move", "sheet": "Sheet1", "range": "A1:B2", "target": "B1" }]
+        }),
+    )
+    .expect("move over the source");
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert!(sheet.cell(1, 1).is_none(), "A1 is cleared");
+    assert!(sheet.cell(2, 1).is_none(), "A2 is cleared");
+    assert_eq!(sheet.cell(1, 2).expect("B1").value, CellValue::number(1.0));
+    assert!(sheet.cell(1, 3).is_none(), "the blank snapshot cell leaves C1 empty");
+    assert_eq!(sheet.cell(2, 2).expect("B2").value, CellValue::number(3.0));
+    assert_eq!(sheet.cell(2, 3).expect("C2").value, CellValue::number(4.0));
+
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
+fn range_move_rejects_out_of_grid_and_merged_ranges_without_changing_the_document() {
+    let created = open_excel_workbook::create(&json!({ "title": "MoveErrors" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [[1, 2], [3, 4]] },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "C1", "end": "D1", "merge": true },
+            ]
+        }),
+    )
+    .expect("seed");
+    let revision = open_excel_workbook::summary(handle).expect("summary")["revision"].clone();
+
+    for request in [
+        json!({ "operations": [{ "op": "range.move", "sheet": "Sheet1", "range": "A1:B2", "target": "A1048576" }] }),
+        json!({ "operations": [{ "op": "range.move", "sheet": "Sheet1", "range": "A1:B1", "target": "XFD1" }] }),
+        json!({ "operations": [{ "op": "range.move", "sheet": "Sheet1", "range": "C1:D1", "target": "A10" }] }),
+        json!({ "operations": [{ "op": "range.move", "sheet": "Sheet1", "range": "A1:B1", "target": "C1" }] }),
+        json!({ "operations": [{ "op": "range.move", "sheet": "Sheet1", "range": "A1:B1" }] }),
+    ] {
+        let error = open_excel_workbook::edit(handle, &request).expect_err("invalid move");
+        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], revision);
+    }
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 1).expect("A1").value, CellValue::number(1.0), "rejected moves keep the source");
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
 fn pdf_export_writes_a_paginated_document() {
     let created = open_excel_workbook::create(&json!({ "title": "Report" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");

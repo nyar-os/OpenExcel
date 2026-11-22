@@ -73,6 +73,7 @@ open-excel export ledger.oexcel --format xlsx --out ledger.xlsx
 | Write a formula and save the result | `open-excel edit ledger.oexcel --cell C2 --formula "=A2+B2" --out ledger.oexcel --overwrite` |
 | Sort rows by the third column | `open-excel sort ledger.oexcel --range A1:D20 --column 3 --header --out ledger.oexcel --overwrite` |
 | Copy a range and keep the source | `open-excel copy ledger.oexcel --range A1:C2 --to E1 --out ledger.oexcel --overwrite` |
+| Move a range and clear the source | `open-excel move ledger.oexcel --range A1:C2 --to E1 --out ledger.oexcel --overwrite` |
 | Freeze rows and columns at C2 | `open-excel freeze ledger.oexcel --at C2 --out ledger.oexcel --overwrite` |
 | Export for review | `open-excel export ledger.oexcel --format pdf --out ledger.pdf` |
 | Transpose a block from the SDK | [`range.transpose`](documentation/agents.md#edit-operation-shape) |
