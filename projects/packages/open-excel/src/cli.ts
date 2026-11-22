@@ -525,6 +525,73 @@ cli
     });
 
 cli
+    .command('replace', 'cli.cmd.replace')
+    .option('--sheet <name>', 'cli.opt.sheet')
+    .option('--range <range>', 'cli.opt.range')
+    .option('--find <text>', 'cli.opt.find')
+    .option('--replace <text>', 'cli.opt.replace')
+    .option('--match-case', 'cli.opt.match-case')
+    .option('--limit <n>', 'cli.opt.limit')
+    .option('--out <file>', 'cli.opt.out')
+    .option('--overwrite', 'cli.opt.overwrite')
+    .actionCtx(async (options, _args, ctx) => {
+        const file = input(options);
+        if (file === undefined) {
+            ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
+            return 2;
+        }
+        const find = text(options, 'find');
+        if (find === undefined || find.length === 0) {
+            ctx.fail('open-excel.cli.find-required', { message: '`--find <text>` is required' });
+            return 2;
+        }
+        const replacement = text(options, 'replace');
+        if (replacement === undefined) {
+            ctx.fail('open-excel.cli.replace-required', { message: '`--replace <text>` is required' });
+            return 2;
+        }
+        const limitText = text(options, 'limit');
+        let limit: number | undefined;
+        if (limitText !== undefined) {
+            const value = Number(limitText);
+            if (!Number.isSafeInteger(value) || value < 1) {
+                ctx.fail('open-excel.cli.limit-invalid', { message: '`--limit <n>` must be a positive integer' });
+                return 2;
+            }
+            limit = value;
+        }
+        const range = text(options, 'range');
+        const sheet = text(options, 'sheet') ?? 'Sheet1';
+        const operation: EditOperation = {
+            op: 'cell.replaceText',
+            sheet,
+            range,
+            find,
+            replace: replacement,
+            matchCase: flag(options, 'match-case'),
+            limit,
+        };
+        await withSession(async (excel) => {
+            const workbook = await excel.open({ path: file });
+            const result = await excel.edit(workbook, { operations: [operation] });
+            const effect = result.affected?.find((entry) => entry.op === 'cell.replaceText');
+            const count = effect?.replaced ?? result.replacements;
+            const scope = range ?? effect?.range ?? 'used range';
+            const out = text(options, 'out');
+            if (out !== undefined) {
+                const saved = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
+                ctx.emitResult(
+                    { ...result, saved },
+                    `replaced ${count} occurrence(s) in ${sheet}!${scope} revision=${saved.revision} saved=${out}`,
+                );
+                return;
+            }
+            ctx.emitResult(result, `replaced ${count} occurrence(s) in ${sheet}!${scope} revision=${result.revision}`);
+        });
+        return 0;
+    });
+
+cli
     .command('format', 'cli.cmd.format')
     .option('--sheet <name>', 'cli.opt.sheet')
     .option('--range <range>', 'cli.opt.range')

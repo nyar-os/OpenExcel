@@ -352,7 +352,7 @@ export interface SheetVisibilityCommandOptions {
     readonly veryHidden?: string;
 }
 
-/** One rectangle a range operation rewrote, as reported by `Workbook.edit()`. */
+/** One rectangle an edit operation rewrote, as reported by `Workbook.edit()`. */
 export interface AffectedRange {
     readonly op:
         | 'range.sort'
@@ -361,10 +361,13 @@ export interface AffectedRange {
         | 'range.copy'
         | 'range.move'
         | 'range.swap'
-        | 'range.flip';
+        | 'range.flip'
+        | 'cell.replaceText';
     readonly sheet: string;
     /** A1 rectangle such as `A1:A5`. */
     readonly range: string;
+    /** Occurrences replaced by a `cell.replaceText` operation. */
+    readonly replaced?: number;
 }
 
 /**
@@ -532,13 +535,21 @@ export type EditOperation =
           readonly count?: number;
       }
     | {
-          /** Replaces text inside `range` and reports the replacement count. */
+          /**
+           * Replaces text inside `range` and reports the replacement count.
+           * When `range` is omitted the sheet's used rectangle is scanned.
+           * Formula cells are skipped; `limit` caps the occurrences replaced,
+           * scanning cells in row-major order.
+           */
           readonly op: 'cell.replaceText';
           readonly sheet: string;
-          readonly range: string;
+          /** A1 rectangle such as `A1:C4`; defaults to the used rectangle. */
+          readonly range?: string;
           readonly find: string;
           readonly replace: string;
           readonly matchCase?: boolean;
+          /** Maximum occurrences to replace; unlimited when omitted. */
+          readonly limit?: number;
       }
     | { readonly op: 'sheet.add'; readonly name: string; readonly index?: number }
     | { readonly op: 'sheet.rename'; readonly sheet: string; readonly name: string }
@@ -609,7 +620,7 @@ export interface EditResult {
     readonly workbook: Workbook;
     /** Occurrences changed by `cell.replaceText` operations. */
     readonly replacements: number;
-    /** Rectangles rewritten by range operations. */
+    /** Rectangles and replacement counts recorded by the batch. */
     readonly affected?: readonly AffectedRange[];
 }
 

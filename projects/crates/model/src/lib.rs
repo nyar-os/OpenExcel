@@ -1027,12 +1027,18 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
         }
         "cell.replaceText" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
-            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
-            let range = operation
+            let sheet_name = project.sheet(key).map(|sheet| sheet.name.clone()).unwrap_or_else(|| key.to_owned());
+            let requested = operation
                 .get("range")
                 .and_then(Value::as_str)
-                .and_then(reference::parse_range)
-                .ok_or_else(|| ServiceError::argument("`cell.replaceText` needs an A1 range such as `A1:C4`"))?;
+                .map(str::trim)
+                .filter(|range| !range.is_empty());
+            let requested = requested
+                .map(|range| {
+                    reference::parse_range(range)
+                        .ok_or_else(|| ServiceError::argument(format!("`{range}` is not an A1 range such as `A1:C4`")))
+                })
+                .transpose()?;
             let find = operation
                 .get("find")
                 .and_then(Value::as_str)
@@ -1040,9 +1046,30 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                 .ok_or_else(|| ServiceError::argument("`cell.replaceText` needs a non-empty `find`"))?;
             let replacement = operation.get("replace").and_then(Value::as_str).unwrap_or("");
             let match_case = operation.get("matchCase").and_then(Value::as_bool).unwrap_or(false);
+            let limit = match operation.get("limit") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(
+                    value
+                        .as_u64()
+                        .and_then(|limit| usize::try_from(limit).ok())
+                        .filter(|limit| *limit >= 1)
+                        .ok_or_else(|| ServiceError::argument("`cell.replaceText` `limit` must be a positive integer"))?,
+                ),
+            };
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let range = match requested {
+                Some(range) => range,
+                None => sheet.actual_range().ok_or_else(|| {
+                    ServiceError::argument("`cell.replaceText` needs an A1 range when the sheet has no content")
+                })?,
+            };
+            let mut budget = limit.unwrap_or(usize::MAX);
             let mut replacements = 0usize;
-            for row in range.start_row..=range.end_row {
+            'cells: for row in range.start_row..=range.end_row {
                 for column in range.start_column..=range.end_column {
+                    if budget == 0 {
+                        break 'cells;
+                    }
                     let Some(mut cell) = sheet.cell(row, column).cloned()
                     else {
                         continue;
@@ -1054,14 +1081,21 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                     else {
                         continue;
                     };
-                    let (next, replaced) = replace_occurrences(text, find, replacement, match_case);
+                    let (next, replaced) = replace_occurrences(text, find, replacement, match_case, budget);
                     if replaced > 0 {
+                        budget -= replaced;
                         replacements += replaced;
                         cell.value = CellValue::text(next);
                         sheet.set_cell(cell);
                     }
                 }
             }
+            affected.push(json!({
+                "op": "cell.replaceText",
+                "sheet": sheet_name,
+                "range": range.reference(),
+                "replaced": replacements,
+            }));
             replacements
         }
         "sheet.duplicate" => {
@@ -1702,18 +1736,19 @@ fn compare_sort_values(left: &CellValue, right: &CellValue, ascending: bool) -> 
     if ascending { ordering } else { ordering.reverse() }
 }
 
-/// Replaces every non-overlapping occurrence and reports how many it replaced.
-fn replace_occurrences(text: &str, find: &str, replacement: &str, match_case: bool) -> (String, usize) {
+/// Replaces up to `limit` non-overlapping occurrences and reports how many it replaced.
+fn replace_occurrences(text: &str, find: &str, replacement: &str, match_case: bool, limit: usize) -> (String, usize) {
     let haystack: Vec<char> = text.chars().collect();
     let needle: Vec<char> = find.chars().collect();
-    if needle.is_empty() {
+    if needle.is_empty() || limit == 0 {
         return (text.to_owned(), 0);
     }
     let mut output = String::new();
     let mut replacements = 0usize;
     let mut index = 0usize;
     while index < haystack.len() {
-        if index + needle.len() <= haystack.len()
+        if replacements < limit
+            && index + needle.len() <= haystack.len()
             && haystack[index..index + needle.len()]
                 .iter()
                 .zip(&needle)

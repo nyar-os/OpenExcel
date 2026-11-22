@@ -30,6 +30,7 @@ The bin is `open-excel` (`projects/packages/open-excel/dist/cli.js`). A project 
 | `move` | `open-excel move <file>` | `--sheet`, `--range`, `--to`, `--out`, `--overwrite` |
 | `swap` | `open-excel swap <file>` | `--sheet`, `--range`, `--to`, `--out`, `--overwrite` |
 | `flip` | `open-excel flip <file>` | `--sheet`, `--range`, `--axis <horizontal\|vertical>`, `--out`, `--overwrite` |
+| `replace` | `open-excel replace <file>` | `--sheet`, `--range` (defaults to the used rectangle), `--find`, `--replace`, `--match-case`, `--limit`, `--out`, `--overwrite` |
 | `format` | `open-excel format <file>` | `--sheet`, `--range`, `--bold`, `--italic`, `--font-size`, `--font-color`, `--fill`, `--number-format`, `--align`, `--wrap`, `--out`, `--overwrite` |
 | `layout` | `open-excel layout <file>` | `--sheet`, `--column`, `--width`, `--row`, `--height`, `--hide`, `--out`, `--overwrite` |
 | `row` | `open-excel row <file>` | `--sheet`, `--insert <n>` or `--delete <n>`, `--count`, `--out`, `--overwrite` |
@@ -46,7 +47,7 @@ The bin is `open-excel` (`projects/packages/open-excel/dist/cli.js`). A project 
 
 Notes:
 
-- Mutating commands (`edit`, `sort`, `copy`, `move`, `swap`, `flip`, `format`, `layout`, `row`, `column`, `freeze`, `sheet`) only persist when `--out` is given. Without `--out` the change exists only in the opened handle and is lost when the process exits.
+- Mutating commands (`edit`, `sort`, `copy`, `move`, `swap`, `flip`, `replace`, `format`, `layout`, `row`, `column`, `freeze`, `sheet`) only persist when `--out` is given. Without `--out` the change exists only in the opened handle and is lost when the process exits.
 - `--sheet` defaults to `Sheet1`. Addresses are A1-style: `B4`, `A1:C4`.
 - `--column` for `sort` is a one-based offset inside `--range`, or an absolute column letter.
 - `edit --ops` cannot be combined with `--cell`, `--value` or `--formula`.
@@ -110,7 +111,7 @@ JSON mode uses the `wae.cli-result/v0` envelope:
 | `column.insert` / `column.delete` | `sheet`, `column` | `count` (default `1`) | Inserts before or deletes from a one-based number or letter. |
 | `row.setHeight` | `sheet`, `row`, `height` | `hidden` | Sets row height in points. |
 | `column.setWidth` | `sheet`, `column`, `width` | `hidden` | Sets column width in Excel character units. |
-| `cell.replaceText` | `sheet`, `range`, `find`, `replace` | `matchCase` | Replaces text and reports the replacement count. |
+| `cell.replaceText` | `sheet`, `find`, `replace` | `range`, `matchCase`, `limit` | Replaces text in string cell values, skipping formulas, and reports the replacement count. `range` defaults to the used rectangle; `limit` caps occurrences in row-major order. Each call appends `{ op: "cell.replaceText", sheet, range, replaced }` to `affected`. |
 
 The batch is atomic: every operation is validated before the first one is applied, and a successful batch advances `revision` once. `sheet` accepts a sheet name or id.
 

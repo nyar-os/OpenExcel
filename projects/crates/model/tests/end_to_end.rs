@@ -551,6 +551,69 @@ fn merge_freeze_visibility_and_replace_text_edits_apply() {
 }
 
 #[test]
+fn replace_text_scans_the_used_rectangle_and_honours_limit() {
+    let created = open_excel_workbook::create(&json!({ "title": "Replace" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["alpha alpha", "alpha"]] },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "B2", "formula": "=\"alpha\"" }
+            ]
+        }),
+    )
+    .expect("seed");
+
+    let limited = open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.replaceText", "sheet": "Sheet1", "find": "alpha", "replace": "X", "limit": 2 }
+            ]
+        }),
+    )
+    .expect("limited replace");
+    assert_eq!(limited["replacements"], json!(2));
+    assert_eq!(
+        limited["affected"],
+        json!([{ "op": "cell.replaceText", "sheet": "Sheet1", "range": "A1:B2", "replaced": 2 }])
+    );
+    let sheet = project_of(handle).sheet("Sheet1").expect("sheet").clone();
+    assert_eq!(sheet.cell(1, 1).expect("A1").value, CellValue::text("X X"));
+    assert_eq!(sheet.cell(1, 2).expect("B1").value, CellValue::text("alpha"));
+    assert_eq!(sheet.cell(2, 2).expect("B2").formula.as_deref(), Some("=\"alpha\""));
+
+    let rest = open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "cell.replaceText", "sheet": "Sheet1", "find": "alpha", "replace": "Z" }] }),
+    )
+    .expect("unbounded replace");
+    assert_eq!(rest["replacements"], json!(1));
+    let sheet = project_of(handle).sheet("Sheet1").expect("sheet").clone();
+    assert_eq!(sheet.cell(1, 2).expect("B1").value, CellValue::text("Z"));
+
+    let zero = open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "cell.replaceText", "sheet": "Sheet1", "find": "alpha", "limit": 0 }] }),
+    )
+    .expect_err("zero limit");
+    assert_eq!(zero.code, "session/argument-invalid");
+
+    let empty = open_excel_workbook::create(&json!({ "title": "Empty" })).expect("create");
+    let empty_handle = empty["handle"].as_u64().expect("handle");
+    let missing = open_excel_workbook::edit(
+        empty_handle,
+        &json!({ "operations": [{ "op": "cell.replaceText", "sheet": "Sheet1", "find": "x", "replace": "y" }] }),
+    )
+    .expect_err("empty sheet");
+    assert_eq!(missing.code, "session/argument-invalid");
+    open_excel_workbook::close(empty_handle).expect("close");
+
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
 fn find_reports_character_offsets_for_values_and_formulas() {
     let created = open_excel_workbook::create(&json!({ "title": "Search" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");
