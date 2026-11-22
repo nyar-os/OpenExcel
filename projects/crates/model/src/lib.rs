@@ -828,6 +828,11 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             affected.push(range_effect(project, operation, "range.move", &written));
             0
         }
+        "range.swap" => {
+            let written = swap_range(project, operation)?;
+            affected.push(range_effect(project, operation, "range.swap", &written));
+            0
+        }
         "range.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
@@ -1415,6 +1420,91 @@ fn move_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
         }
     }
     Ok(destination)
+}
+
+/// Exchanges two equal-sized rectangles anchored at `range` and `target`.
+///
+/// Cell contents, styles and formula sources travel verbatim; relative
+/// references inside formulas are not rewritten. Both rectangles are
+/// snapshotted before either is cleared, so overlapping rectangles stay
+/// deterministic. Merges are rejected because swapped cells would lose their
+/// shape. The reported range is the bounding rectangle of both rectangles.
+fn swap_range(project: &mut Project, operation: &Value) -> Result<CellRange, ServiceError> {
+    let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+    let range = operation
+        .get("range")
+        .and_then(Value::as_str)
+        .and_then(reference::parse_range)
+        .ok_or_else(|| ServiceError::argument("`range.swap` needs an A1 range such as `A1:B2`"))?;
+    if !range.is_valid() || range.end_row > 1_048_576 || range.end_column > 16_384 {
+        return Err(ServiceError::argument(format!("swap range `{}` leaves the sheet grid", range.reference())));
+    }
+    let (target_row, target_column) = operation
+        .get("target")
+        .and_then(Value::as_str)
+        .and_then(reference::parse_reference)
+        .ok_or_else(|| ServiceError::argument("`range.swap` needs an A1 `target` anchor such as `E1`"))?;
+    let end_row = target_row
+        .checked_add(range.rows() - 1)
+        .filter(|row| *row <= 1_048_576)
+        .ok_or_else(|| ServiceError::argument("the swapped range leaves the sheet grid"))?;
+    let end_column = target_column
+        .checked_add(range.columns() - 1)
+        .filter(|column| *column <= 16_384)
+        .ok_or_else(|| ServiceError::argument("the swapped range leaves the sheet grid"))?;
+    let destination = CellRange { start_row: target_row, end_row, start_column: target_column, end_column };
+    let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+    if let Some(merged) = sheet.merged.iter().find(|merged| merged.overlaps(&range) || merged.overlaps(&destination)) {
+        return Err(ServiceError::argument(format!("`range.swap` cannot swap merged range `{}`", merged.reference())));
+    }
+    if destination == range {
+        return Ok(range);
+    }
+    let snapshot = |rect: &CellRange| -> Vec<Vec<Option<model::Cell>>> {
+        (rect.start_row..=rect.end_row)
+            .map(|row| (rect.start_column..=rect.end_column).map(|column| sheet.cell(row, column).cloned()).collect())
+            .collect()
+    };
+    let source_cells = snapshot(&range);
+    let target_cells = snapshot(&destination);
+    sheet.clear_range(&range);
+    sheet.clear_range(&destination);
+    for (row_offset, row) in target_cells.iter().enumerate() {
+        for (column_offset, cell) in row.iter().enumerate() {
+            let Some(cell) = cell.clone()
+            else {
+                continue;
+            };
+            let row = range.start_row + row_offset as u32;
+            let column = range.start_column + column_offset as u32;
+            let mut moved = cell;
+            moved.row = row;
+            moved.column = column;
+            moved.reference = reference::format_reference(row, column);
+            sheet.set_cell(moved);
+        }
+    }
+    for (row_offset, row) in source_cells.iter().enumerate() {
+        for (column_offset, cell) in row.iter().enumerate() {
+            let Some(cell) = cell.clone()
+            else {
+                continue;
+            };
+            let row = destination.start_row + row_offset as u32;
+            let column = destination.start_column + column_offset as u32;
+            let mut moved = cell;
+            moved.row = row;
+            moved.column = column;
+            moved.reference = reference::format_reference(row, column);
+            sheet.set_cell(moved);
+        }
+    }
+    Ok(CellRange::between(
+        range.start_row.min(destination.start_row),
+        range.start_column.min(destination.start_column),
+        range.end_row.max(destination.end_row),
+        range.end_column.max(destination.end_column),
+    ))
 }
 
 /// Reads a finite numeric field of an operation.

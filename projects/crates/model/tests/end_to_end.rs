@@ -1120,6 +1120,127 @@ fn range_move_rejects_out_of_grid_and_merged_ranges_without_changing_the_documen
 }
 
 #[test]
+fn range_swap_exchanges_values_formulas_and_styles_both_ways() {
+    let created = open_excel_workbook::create(&json!({ "title": "Swap" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    ["a", "b"],
+                    [1, { "formula": "=1+2" }],
+                ] },
+                { "op": "format.set", "sheet": "Sheet1", "range": "A1:B1", "style": { "bold": true, "fill": "#ffeeaa" } },
+                { "op": "range.set", "sheet": "Sheet1", "start": "D1", "rows": [
+                    ["x", "y"],
+                    [7, 8],
+                ] },
+                { "op": "format.set", "sheet": "Sheet1", "range": "D1", "style": { "italic": true } },
+            ]
+        }),
+    )
+    .expect("seed");
+
+    let edited = open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [{ "op": "range.swap", "sheet": "Sheet1", "range": "A1:B2", "target": "D1" }]
+        }),
+    )
+    .expect("swap");
+    assert_eq!(edited["affected"], json!([{ "op": "range.swap", "sheet": "Sheet1", "range": "A1:E2" }]));
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 4).expect("D1").value, CellValue::text("a"));
+    assert_eq!(sheet.cell(1, 5).expect("E1").value, CellValue::text("b"));
+    assert_eq!(sheet.cell(2, 4).expect("D2").value, CellValue::number(1.0));
+    let moved_formula = sheet.cell(2, 5).expect("E2");
+    assert_eq!(moved_formula.formula.as_deref(), Some("=1+2"));
+    assert_eq!(moved_formula.computed, Some(CellValue::number(3.0)));
+    let source_style = sheet.cell(1, 4).and_then(|cell| cell.style.as_ref()).expect("D1 style");
+    assert_eq!(source_style.bold, Some(true));
+    assert_eq!(source_style.fill.as_deref(), Some("#ffeeaa"));
+
+    assert_eq!(sheet.cell(1, 1).expect("A1").value, CellValue::text("x"));
+    assert_eq!(sheet.cell(1, 2).expect("B1").value, CellValue::text("y"));
+    assert_eq!(sheet.cell(2, 1).expect("A2").value, CellValue::number(7.0));
+    assert_eq!(sheet.cell(2, 2).expect("B2").value, CellValue::number(8.0));
+    let target_style = sheet.cell(1, 1).and_then(|cell| cell.style.as_ref()).expect("A1 style");
+    assert_eq!(target_style.italic, Some(true));
+    assert!(sheet.cell(2, 1).and_then(|cell| cell.style.as_ref()).is_none(), "styles travel with their cells");
+
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
+fn range_swap_uses_snapshots_when_the_rectangles_overlap() {
+    let created = open_excel_workbook::create(&json!({ "title": "SwapOverlap" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [{ "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [[1, 2], [3, 4]] }]
+        }),
+    )
+    .expect("seed");
+
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [{ "op": "range.swap", "sheet": "Sheet1", "range": "A1:B2", "target": "B1" }]
+        }),
+    )
+    .expect("swap overlap");
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 1).expect("A1").value, CellValue::number(2.0));
+    assert_eq!(sheet.cell(1, 2).expect("B1").value, CellValue::number(1.0));
+    assert_eq!(sheet.cell(1, 3).expect("C1").value, CellValue::number(2.0));
+    assert_eq!(sheet.cell(2, 1).expect("A2").value, CellValue::number(4.0));
+    assert_eq!(sheet.cell(2, 2).expect("B2").value, CellValue::number(3.0));
+    assert_eq!(sheet.cell(2, 3).expect("C2").value, CellValue::number(4.0));
+
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
+fn range_swap_rejects_out_of_grid_and_merged_ranges_without_changing_the_document() {
+    let created = open_excel_workbook::create(&json!({ "title": "SwapErrors" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [[1, 2], [3, 4]] },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "C1", "end": "D1", "merge": true },
+            ]
+        }),
+    )
+    .expect("seed");
+    let revision = open_excel_workbook::summary(handle).expect("summary")["revision"].clone();
+
+    for request in [
+        json!({ "operations": [{ "op": "range.swap", "sheet": "Sheet1", "range": "A1:B2", "target": "A1048576" }] }),
+        json!({ "operations": [{ "op": "range.swap", "sheet": "Sheet1", "range": "A1:B1", "target": "XFD1" }] }),
+        json!({ "operations": [{ "op": "range.swap", "sheet": "Sheet1", "range": "C1:D1", "target": "A10" }] }),
+        json!({ "operations": [{ "op": "range.swap", "sheet": "Sheet1", "range": "A1:B1", "target": "C1" }] }),
+        json!({ "operations": [{ "op": "range.swap", "sheet": "Sheet1", "range": "A1:B1" }] }),
+    ] {
+        let error = open_excel_workbook::edit(handle, &request).expect_err("invalid swap");
+        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], revision);
+    }
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 1).expect("A1").value, CellValue::number(1.0), "rejected swaps keep both rectangles");
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
 fn pdf_export_writes_a_paginated_document() {
     let created = open_excel_workbook::create(&json!({ "title": "Report" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");

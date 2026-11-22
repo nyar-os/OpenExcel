@@ -27,7 +27,7 @@ const svg = await excel.render(book, { sheet: 'Sheet1' });
 await excel.dispose();
 ```
 
-`edit()` accepts these operations: `cell.set`, `range.set`, `range.copy`, `range.move`, `range.sort`, `range.fillSeries`, `range.transpose`, `range.clear`, `format.set`, `merge.set`, `sheet.freeze`, `sheet.setVisibility`, `sheet.add`, `sheet.rename`, `sheet.remove`, `sheet.duplicate`, `sheet.move`, `row.insert`, `row.delete`, `column.insert`, `column.delete`, `row.setHeight`, `column.setWidth` and `cell.replaceText`. Pass `expectedRevision` to reject a stale writer.
+`edit()` accepts these operations: `cell.set`, `range.set`, `range.copy`, `range.move`, `range.swap`, `range.sort`, `range.fillSeries`, `range.transpose`, `range.clear`, `format.set`, `merge.set`, `sheet.freeze`, `sheet.setVisibility`, `sheet.add`, `sheet.rename`, `sheet.remove`, `sheet.duplicate`, `sheet.move`, `row.insert`, `row.delete`, `column.insert`, `column.delete`, `row.setHeight`, `column.setWidth` and `cell.replaceText`. Pass `expectedRevision` to reject a stale writer.
 
 Export targets are `xlsx`, `csv`, `tsv`, `json`, `html` and `pdf`; `xlsm` export is not available. CSV, TSV and HTML write the primary sheet and report skipped sheets as losses. PDF is partial and reports its own loss codes. `open()` reads a path to `.oexcel`, `.xlsx`, `.xlsm`, `.csv` or `.tsv`; in-memory bytes and non-edit intents are rejected. Failures are `OpenExcelError` instances with one of the stable codes from `errorCodes`.
 
