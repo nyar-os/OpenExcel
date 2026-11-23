@@ -661,6 +661,16 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
         .and_then(Value::as_str)
         .ok_or_else(|| ServiceError::argument("each operation needs an `op` field"))?;
     let replacements = match kind {
+        "workbook.setTitle" => {
+            let title = operation
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+                .ok_or_else(|| ServiceError::argument("`workbook.setTitle` needs a non-empty `title`"))?;
+            project.title = title.to_owned();
+            0
+        }
         "cell.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
@@ -927,6 +937,23 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                 }
             }
             affected.push(range_effect(project, operation, "range.sort", &range));
+            0
+        }
+        "range.removeDuplicates" => {
+            let removed = remove_duplicate_rows(project, operation)?;
+            let range = operation
+                .get("range")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`range.removeDuplicates` needs an A1 range such as `A1:C4`"))?;
+            affected.push(json!({
+                "op": "range.removeDuplicates",
+                "sheet": project.sheet(operation.get("sheet").and_then(Value::as_str).unwrap_or(""))
+                    .map(|sheet| sheet.name.clone())
+                    .unwrap_or_default(),
+                "range": range.reference(),
+                "removed": removed,
+            }));
             0
         }
         "range.fillSeries" => {
@@ -1565,6 +1592,125 @@ fn optional_finite(operation: &Value, key: &str) -> Result<Option<f64>, ServiceE
 /// With `kind: "date"` the series is a sequence of Excel date serials (the step
 /// is a number of days) and every written cell also gains the `yyyy-mm-dd`
 /// number format.
+/// Removes duplicate rows from `range`, keeping the first occurrence.
+///
+/// Rows compare by the values a reader sees in the selected key columns, which
+/// default to every column of the range; `hasHeader` keeps the first row in
+/// place. Surviving rows move up with their values, formula sources, cached
+/// results and styles, and the vacated rows at the bottom are cleared. Merged
+/// ranges in the way are rejected, exactly like `range.sort`.
+fn remove_duplicate_rows(project: &mut Project, operation: &Value) -> Result<usize, ServiceError> {
+    let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+    let range = operation
+        .get("range")
+        .and_then(Value::as_str)
+        .and_then(reference::parse_range)
+        .ok_or_else(|| ServiceError::argument("`range.removeDuplicates` needs an A1 range such as `A1:C4`"))?;
+    if !range.is_valid() || range.end_row > 1_048_576 || range.end_column > 16_384 {
+        return Err(ServiceError::argument(format!("duplicate range `{}` leaves the sheet grid", range.reference())));
+    }
+    let has_header = operation.get("hasHeader").and_then(Value::as_bool).unwrap_or(false);
+    let keys = duplicate_key_columns(operation, &range)?;
+    eval::recalculate(project);
+    let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+    if let Some(merged) = sheet.merged.iter().find(|merged| merged.overlaps(&range)) {
+        return Err(ServiceError::argument(format!(
+            "`range.removeDuplicates` cannot move rows through merged range `{}`",
+            merged.reference()
+        )));
+    }
+    let first_row = range.start_row + u32::from(has_header);
+    if first_row > range.end_row {
+        return Ok(0);
+    }
+    let mut seen: Vec<Vec<CellValue>> = Vec::new();
+    let mut kept: Vec<Vec<Option<model::Cell>>> = Vec::new();
+    let mut removed = 0usize;
+    for row in first_row..=range.end_row {
+        let signature = keys
+            .iter()
+            .map(|column| sheet.cell(row, *column).map(eval::value_of).unwrap_or(CellValue::Empty))
+            .collect::<Vec<_>>();
+        if seen.contains(&signature) {
+            removed += 1;
+            continue;
+        }
+        seen.push(signature);
+        kept.push((range.start_column..=range.end_column).map(|column| sheet.cell(row, column).cloned()).collect());
+    }
+    if removed == 0 {
+        return Ok(0);
+    }
+    let body = CellRange {
+        start_row: first_row,
+        end_row: range.end_row,
+        start_column: range.start_column,
+        end_column: range.end_column,
+    };
+    sheet.clear_range(&body);
+    for (offset, cells) in kept.into_iter().enumerate() {
+        let row = first_row + offset as u32;
+        for (column_offset, cell) in cells.into_iter().enumerate() {
+            let Some(mut cell) = cell
+            else {
+                continue;
+            };
+            cell.row = row;
+            cell.column = range.start_column + column_offset as u32;
+            cell.reference = reference::format_reference(cell.row, cell.column);
+            sheet.set_cell(cell);
+        }
+    }
+    Ok(removed)
+}
+
+/// Resolves the key columns of `range.removeDuplicates`.
+///
+/// A number is a one-based offset inside the range, matching `range.sort`, and
+/// a string is an absolute column letter. Omitted keys mean every column.
+fn duplicate_key_columns(operation: &Value, range: &CellRange) -> Result<Vec<u32>, ServiceError> {
+    let Some(requested) = operation.get("keys").filter(|value| !value.is_null()) else {
+        return Ok((range.start_column..=range.end_column).collect());
+    };
+    let requested = requested
+        .as_array()
+        .ok_or_else(|| ServiceError::argument("`keys` must be an array of column offsets or letters"))?;
+    if requested.is_empty() {
+        return Err(ServiceError::argument("`keys` must list at least one column"));
+    }
+    let mut columns = Vec::with_capacity(requested.len());
+    for item in requested {
+        let column = match item {
+            Value::Number(number) => {
+                let offset = number
+                    .as_u64()
+                    .filter(|offset| *offset >= 1)
+                    .ok_or_else(|| ServiceError::argument("a numeric `keys` offset must be a positive integer"))?;
+                let offset =
+                    u32::try_from(offset).map_err(|_| ServiceError::argument("a numeric `keys` offset is too large"))?;
+                range
+                    .start_column
+                    .checked_add(offset - 1)
+                    .ok_or_else(|| ServiceError::argument("a `keys` offset leaves the sheet grid"))?
+            }
+            Value::String(text) => reference::column_number(text.trim())
+                .ok_or_else(|| ServiceError::argument(format!("`{text}` is not a column letter such as `B`")))?,
+            _ => return Err(ServiceError::argument("`keys` must hold column offsets or letters")),
+        };
+        if column < range.start_column || column > range.end_column {
+            return Err(ServiceError::argument(format!(
+                "key column `{}` is outside the range `{}`",
+                reference::column_name(column),
+                range.reference()
+            )));
+        }
+        if !columns.contains(&column) {
+            columns.push(column);
+        }
+    }
+    Ok(columns)
+}
+
 fn fill_series(project: &mut Project, operation: &Value) -> Result<CellRange, ServiceError> {
     let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
     let range = operation

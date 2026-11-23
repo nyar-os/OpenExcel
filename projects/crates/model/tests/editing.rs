@@ -887,3 +887,123 @@ fn date_series_fill_rejects_invalid_kind_requests() {
     }
     engine::close(handle).expect("close");
 }
+
+#[test]
+fn workbook_title_edits_show_up_in_summary_and_project() {
+    let project_path = temp_path("workbook-title", "oexcel");
+    let created = engine::create(&json!({ "title": "Original" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+
+    let edited = engine::edit(
+        handle,
+        &json!({ "operations": [{ "op": "workbook.setTitle", "title": "  Quarterly plan  " }] }),
+    )
+    .expect("rename the workbook");
+    assert_eq!(edited["workbook"]["title"], json!("Quarterly plan"));
+    assert_eq!(edited["revision"], json!(1));
+
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+    let project = read_project_json(&project_path);
+    assert_eq!(project["title"], json!("Quarterly plan"));
+
+    let reopened = engine::open(&project_path).expect("reopen");
+    let handle = reopened["handle"].as_u64().expect("handle");
+    assert_eq!(reopened["workbook"]["title"], json!("Quarterly plan"));
+    for request in [
+        json!({ "operations": [{ "op": "workbook.setTitle" }] }),
+        json!({ "operations": [{ "op": "workbook.setTitle", "title": "   " }] }),
+        json!({ "operations": [{ "op": "workbook.setTitle", "title": 7 }] }),
+    ] {
+        let error = engine::edit(handle, &request).expect_err("invalid title");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    assert_eq!(engine::summary(handle).expect("summary")["title"], json!("Quarterly plan"));
+    engine::close(handle).expect("close");
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn remove_duplicates_keeps_the_first_row_and_compacts_the_range() {
+    let project_path = temp_path("remove-duplicates", "oexcel");
+    let created = engine::create(&json!({ "title": "Dedup" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    ["Name", "Value"], ["alpha", 1], ["beta", 2], ["alpha", 1], ["alpha", 3]
+                ] },
+                { "op": "range.set", "sheet": "Sheet1", "start": "C1", "rows": [["x"], ["y"], ["x"]] },
+            ]
+        }),
+    )
+    .expect("seed rows");
+
+    let edited = engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.removeDuplicates", "sheet": "Sheet1", "range": "A1:B5", "hasHeader": true, "keys": [1] },
+                { "op": "range.removeDuplicates", "sheet": "Sheet1", "range": "C1:C3" },
+            ]
+        }),
+    )
+    .expect("remove duplicate rows");
+    assert_eq!(edited["affected"][0]["op"], json!("range.removeDuplicates"));
+    assert_eq!(edited["affected"][0]["range"], json!("A1:B5"));
+    assert_eq!(edited["affected"][0]["removed"], json!(2), "two later alpha rows collapse into the first");
+    assert_eq!(edited["affected"][1]["removed"], json!(1), "the default keys compare every column");
+
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    assert_eq!(cell_json(sheet, "A1")["value"]["text"], json!("Name"), "the header stays in place");
+    assert_eq!(cell_json(sheet, "A2")["value"]["text"], json!("alpha"));
+    assert_eq!(cell_json(sheet, "B2")["value"]["number"], json!(1.0));
+    assert_eq!(cell_json(sheet, "A3")["value"]["text"], json!("beta"));
+    assert_eq!(cell_json(sheet, "B3")["value"]["number"], json!(2.0));
+    assert!(
+        sheet["cells"].as_array().unwrap().iter().all(|cell| cell["reference"] != "A4"),
+        "the tail collapses: {sheet}"
+    );
+    assert_eq!(cell_json(sheet, "C1")["value"]["text"], json!("x"));
+    assert_eq!(cell_json(sheet, "C2")["value"]["text"], json!("y"));
+    assert!(
+        sheet["cells"].as_array().unwrap().iter().all(|cell| cell["reference"] != "C3"),
+        "the repeated x is removed: {sheet}"
+    );
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn remove_duplicates_rejects_bad_keys_and_merged_ranges() {
+    let created = engine::create(&json!({ "title": "DedupErrors" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["a", 1], ["a", 2]] },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "D1", "end": "E1", "merge": true },
+            ]
+        }),
+    )
+    .expect("seed");
+    let revision = engine::summary(handle).expect("summary")["revision"].as_u64().expect("revision");
+    for request in [
+        json!({ "operations": [{ "op": "range.removeDuplicates", "sheet": "Sheet1", "range": "A1:B2", "keys": [] }] }),
+        json!({ "operations": [{ "op": "range.removeDuplicates", "sheet": "Sheet1", "range": "A1:B2", "keys": ["Z"] }] }),
+        json!({ "operations": [{ "op": "range.removeDuplicates", "sheet": "Sheet1", "range": "A1:B2", "keys": [9] }] }),
+        json!({ "operations": [{ "op": "range.removeDuplicates", "sheet": "Sheet1", "range": "A1:B2", "keys": "A" }] }),
+        json!({ "operations": [{ "op": "range.removeDuplicates", "sheet": "Sheet1", "range": "D1:E1" }] }),
+        json!({ "operations": [{ "op": "range.removeDuplicates", "sheet": "Sheet1", "range": "not-a-range" }] }),
+    ] {
+        let error = engine::edit(handle, &request).expect_err("invalid dedup request");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    assert_eq!(engine::summary(handle).expect("summary")["revision"].as_u64().expect("revision"), revision);
+    engine::close(handle).expect("close");
+}

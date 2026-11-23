@@ -143,6 +143,7 @@ await reopened.dispose();
 
 | `op` | Required fields | Optional fields | Effect |
 | --- | --- | --- | --- |
+| `workbook.setTitle` | `title` | — | Renames the workbook; the title is trimmed, must not be blank, and shows in summaries and saved projects. |
 | `cell.set` | `sheet`, `reference`, and `value` or `formula` | — | Writes one cell. A formula may start with or omit `=`. |
 | `range.set` | `sheet`, `start`, `rows` | — | Writes a matrix of literals, formulas or `null` to clear. |
 | `range.append` | `sheet`, `rows`, `start?` | — | Writes the matrix below the sheet's last populated row; the first column comes from `start` (default `A1`). |
@@ -151,6 +152,7 @@ await reopened.dispose();
 | `range.swap` | `sheet`, `range`, `target` | — | Exchanges the rectangle with the equal-sized rectangle anchored at `target`. |
 | `range.flip` | `sheet`, `range`, `axis` | — | Mirrors the rectangle in place; `horizontal` swaps columns, `vertical` swaps rows. |
 | `range.sort` | `sheet`, `range`, `column` | `ascending`, `hasHeader` | Sorts whole rows; formulas move with their row. |
+| `range.removeDuplicates` | `sheet`, `range` | `keys`, `hasHeader` | Keeps the first row per key signature and compacts the survivors upward, clearing the vacated tail. `keys` holds one-based offsets inside the range or column letters and defaults to every column; cells move with their formulas and styles. Appends `{ op, sheet, range, removed }` to `affected`. |
 | `range.fillSeries` | `sheet`, `range` | `start`, `step`, `kind` | Fills a single row or column with a linear numeric series, or with Excel date serials when `kind` is `date` (the step is then a number of days and each written cell gains the `yyyy-mm-dd` format). |
 | `range.transpose` | `sheet`, `range`, `target` | — | Moves the block into the transposed rectangle and clears the source. |
 | `range.clear` | `sheet`, `range` | — | Removes every cell in the rectangle, including styles and formulas. |

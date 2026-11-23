@@ -369,6 +369,7 @@ export interface SheetVisibilityCommandOptions {
 export interface AffectedRange {
     readonly op:
         | 'range.sort'
+        | 'range.removeDuplicates'
         | 'range.fillSeries'
         | 'range.transpose'
         | 'range.copy'
@@ -381,6 +382,8 @@ export interface AffectedRange {
     readonly range: string;
     /** Occurrences replaced by a `cell.replaceText` operation. */
     readonly replaced?: number;
+    /** Rows removed by a `range.removeDuplicates` operation. */
+    readonly removed?: number;
 }
 
 /**
@@ -448,6 +451,11 @@ export interface RangeFlipOperation {
 
 /** One operation of `Workbook.edit()`. */
 export type EditOperation =
+    | {
+          /** Renames the workbook; the visible title in summaries and projects. */
+          readonly op: 'workbook.setTitle';
+          readonly title: string;
+      }
     | {
           readonly op: 'cell.set';
           readonly sheet: string;
@@ -695,6 +703,22 @@ export type EditOperation =
           readonly column: number | string;
           /** Ascending when true, which is the default. */
           readonly ascending?: boolean;
+          /** Keeps the first row of `range` in place. */
+          readonly hasHeader?: boolean;
+      }
+    | {
+          /**
+           * Removes duplicate rows from `range`, keeping the first occurrence.
+           * Rows compare by the values a reader sees in `keys`, which default to
+           * every column of the range. Surviving rows move up with their values,
+           * formulas and styles, and the vacated tail is cleared. A range that
+           * overlaps a merged range is rejected.
+           */
+          readonly op: 'range.removeDuplicates';
+          readonly sheet: string;
+          readonly range: string;
+          /** One-based offsets inside the range or absolute column letters. */
+          readonly keys?: readonly (number | string)[];
           /** Keeps the first row of `range` in place. */
           readonly hasHeader?: boolean;
       }
