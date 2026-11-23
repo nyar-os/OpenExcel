@@ -956,6 +956,23 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             }));
             0
         }
+        "range.removeEmptyRows" => {
+            let removed = remove_empty_rows(project, operation)?;
+            let range = operation
+                .get("range")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`range.removeEmptyRows` needs an A1 range such as `A1:C4`"))?;
+            affected.push(json!({
+                "op": "range.removeEmptyRows",
+                "sheet": project.sheet(operation.get("sheet").and_then(Value::as_str).unwrap_or(""))
+                    .map(|sheet| sheet.name.clone())
+                    .unwrap_or_default(),
+                "range": range.reference(),
+                "removed": removed,
+            }));
+            0
+        }
         "range.fillSeries" => {
             let filled = fill_series(project, operation)?;
             affected.push(range_effect(project, operation, "range.fillSeries", &filled));
@@ -1650,6 +1667,61 @@ fn remove_duplicate_rows(project: &mut Project, operation: &Value) -> Result<usi
     sheet.clear_range(&body);
     for (offset, cells) in kept.into_iter().enumerate() {
         let row = first_row + offset as u32;
+        for (column_offset, cell) in cells.into_iter().enumerate() {
+            let Some(mut cell) = cell
+            else {
+                continue;
+            };
+            cell.row = row;
+            cell.column = range.start_column + column_offset as u32;
+            cell.reference = reference::format_reference(cell.row, cell.column);
+            sheet.set_cell(cell);
+        }
+    }
+    Ok(removed)
+}
+
+/// Removes rows that hold no cell anywhere inside `range`.
+///
+/// A row counts as empty only when the range has no cell record in it at all;
+/// a styled blank, an empty string or a formula always survives, so cleanup
+/// never drops authored formatting or calculations. Surviving rows move up with
+/// their values, formulas and styles, and the vacated tail is cleared. Merged
+/// ranges in the way are rejected, exactly like `range.sort`.
+fn remove_empty_rows(project: &mut Project, operation: &Value) -> Result<usize, ServiceError> {
+    let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+    let range = operation
+        .get("range")
+        .and_then(Value::as_str)
+        .and_then(reference::parse_range)
+        .ok_or_else(|| ServiceError::argument("`range.removeEmptyRows` needs an A1 range such as `A1:C4`"))?;
+    if !range.is_valid() || range.end_row > 1_048_576 || range.end_column > 16_384 {
+        return Err(ServiceError::argument(format!("empty-row range `{}` leaves the sheet grid", range.reference())));
+    }
+    eval::recalculate(project);
+    let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+    if let Some(merged) = sheet.merged.iter().find(|merged| merged.overlaps(&range)) {
+        return Err(ServiceError::argument(format!(
+            "`range.removeEmptyRows` cannot move rows through merged range `{}`",
+            merged.reference()
+        )));
+    }
+    let mut kept: Vec<Vec<Option<model::Cell>>> = Vec::new();
+    let mut removed = 0usize;
+    for row in range.start_row..=range.end_row {
+        let cells = (range.start_column..=range.end_column).map(|column| sheet.cell(row, column).cloned()).collect::<Vec<_>>();
+        if cells.iter().all(Option::is_none) {
+            removed += 1;
+            continue;
+        }
+        kept.push(cells);
+    }
+    if removed == 0 {
+        return Ok(0);
+    }
+    sheet.clear_range(&range);
+    for (offset, cells) in kept.into_iter().enumerate() {
+        let row = range.start_row + offset as u32;
         for (column_offset, cell) in cells.into_iter().enumerate() {
             let Some(mut cell) = cell
             else {

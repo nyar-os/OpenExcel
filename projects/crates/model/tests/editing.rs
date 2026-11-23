@@ -1007,3 +1007,56 @@ fn remove_duplicates_rejects_bad_keys_and_merged_ranges() {
     assert_eq!(engine::summary(handle).expect("summary")["revision"].as_u64().expect("revision"), revision);
     engine::close(handle).expect("close");
 }
+
+#[test]
+fn remove_empty_rows_compacts_only_rows_without_cells() {
+    let project_path = temp_path("remove-empty-rows", "oexcel");
+    let created = engine::create(&json!({ "title": "Compact" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["alpha", 1]] },
+                { "op": "range.set", "sheet": "Sheet1", "start": "A3", "rows": [["beta", 2]] },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A4", "value": "" },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "D1", "end": "E1", "merge": true },
+            ]
+        }),
+    )
+    .expect("seed rows");
+
+    let edited =
+        engine::edit(handle, &json!({ "operations": [{ "op": "range.removeEmptyRows", "sheet": "Sheet1", "range": "A1:B4" }] }))
+            .expect("compact empty rows");
+    assert_eq!(edited["affected"][0]["op"], json!("range.removeEmptyRows"));
+    assert_eq!(edited["affected"][0]["range"], json!("A1:B4"));
+    assert_eq!(edited["affected"][0]["removed"], json!(1));
+
+    let revision = engine::summary(handle).expect("summary").get("revision").cloned().unwrap_or_default();
+    engine::save(handle, &project_path, true).expect("save");
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    assert_eq!(cell_json(sheet, "A1")["value"]["text"], json!("alpha"));
+    assert_eq!(cell_json(sheet, "A2")["value"]["text"], json!("beta"), "the row after the gap moves up");
+    assert_eq!(cell_json(sheet, "A3")["value"]["text"], json!(""), "an authored blank cell survives");
+    assert!(
+        sheet["cells"].as_array().unwrap().iter().all(|cell| !matches!(cell["reference"].as_str(), Some("A4" | "B4"))),
+        "the vacated tail is cleared: {sheet}"
+    );
+
+    for request in [
+        json!({ "operations": [{ "op": "range.removeEmptyRows", "sheet": "Sheet1", "range": "not-a-range" }] }),
+        json!({ "operations": [{ "op": "range.removeEmptyRows", "sheet": "Sheet1", "range": "D1" }] }),
+    ] {
+        let error = engine::edit(handle, &request).expect_err("invalid empty-row request");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    let missing =
+        engine::edit(handle, &json!({ "operations": [{ "op": "range.removeEmptyRows", "sheet": "Missing", "range": "A1:B2" }] }))
+            .expect_err("unknown sheet");
+    assert_eq!(missing.code, "object/not-found");
+    assert_eq!(engine::summary(handle).expect("summary").get("revision").cloned().unwrap_or_default(), revision);
+    engine::close(handle).expect("close");
+    let _ = fs::remove_file(project_path);
+}

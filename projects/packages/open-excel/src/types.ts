@@ -370,6 +370,7 @@ export interface AffectedRange {
     readonly op:
         | 'range.sort'
         | 'range.removeDuplicates'
+        | 'range.removeEmptyRows'
         | 'range.fillSeries'
         | 'range.transpose'
         | 'range.copy'
@@ -382,7 +383,7 @@ export interface AffectedRange {
     readonly range: string;
     /** Occurrences replaced by a `cell.replaceText` operation. */
     readonly replaced?: number;
-    /** Rows removed by a `range.removeDuplicates` operation. */
+    /** Rows removed by `range.removeDuplicates` or `range.removeEmptyRows`. */
     readonly removed?: number;
 }
 
@@ -721,6 +722,18 @@ export type EditOperation =
           readonly keys?: readonly (number | string)[];
           /** Keeps the first row of `range` in place. */
           readonly hasHeader?: boolean;
+      }
+    | {
+          /**
+           * Removes rows that hold no cell anywhere inside `range` and compacts
+           * the survivors upward, clearing the vacated tail. A styled blank, an
+           * empty string or a formula keeps its row, so cleanup never drops
+           * authored formatting or calculations. A range that overlaps a merged
+           * range is rejected.
+           */
+          readonly op: 'range.removeEmptyRows';
+          readonly sheet: string;
+          readonly range: string;
       }
     | {
           /**

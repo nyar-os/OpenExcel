@@ -153,6 +153,7 @@ await reopened.dispose();
 | `range.flip` | `sheet`, `range`, `axis` | — | Mirrors the rectangle in place; `horizontal` swaps columns, `vertical` swaps rows. |
 | `range.sort` | `sheet`, `range`, `column` | `ascending`, `hasHeader` | Sorts whole rows; formulas move with their row. |
 | `range.removeDuplicates` | `sheet`, `range` | `keys`, `hasHeader` | Keeps the first row per key signature and compacts the survivors upward, clearing the vacated tail. `keys` holds one-based offsets inside the range or column letters and defaults to every column; cells move with their formulas and styles. Appends `{ op, sheet, range, removed }` to `affected`. |
+| `range.removeEmptyRows` | `sheet`, `range` | — | Removes rows with no cell anywhere inside the range, compacts the survivors upward and clears the vacated tail. Authored blank cells, empty strings and formulas keep their rows. Appends `{ op, sheet, range, removed }` to `affected`. |
 | `range.fillSeries` | `sheet`, `range` | `start`, `step`, `kind` | Fills a single row or column with a linear numeric series, or with Excel date serials when `kind` is `date` (the step is then a number of days and each written cell gains the `yyyy-mm-dd` format). |
 | `range.transpose` | `sheet`, `range`, `target` | — | Moves the block into the transposed rectangle and clears the source. |
 | `range.clear` | `sheet`, `range` | — | Removes every cell in the rectangle, including styles and formulas. |
