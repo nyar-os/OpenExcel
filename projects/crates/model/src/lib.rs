@@ -1402,6 +1402,55 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             }));
             0
         }
+        "range.trimText" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet_name = project.sheet(key).map(|sheet| sheet.name.clone()).unwrap_or_else(|| key.to_owned());
+            let range = operation
+                .get("range")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`range.trimText` needs an A1 range such as `A1:C4`"))?;
+            let collapse = match operation.get("collapse") {
+                None | Some(Value::Null) => false,
+                Some(Value::Bool(flag)) => *flag,
+                Some(_) => return Err(ServiceError::argument("`collapse` must be a boolean")),
+            };
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let mut changed = 0usize;
+            for row in range.start_row..=range.end_row {
+                for column in range.start_column..=range.end_column {
+                    let Some(mut cell) = sheet.cell(row, column).cloned()
+                    else {
+                        continue;
+                    };
+                    if cell.formula.is_some() {
+                        continue;
+                    }
+                    let CellValue::Text { text } = &cell.value
+                    else {
+                        continue;
+                    };
+                    let next = if collapse {
+                        text.split_whitespace().collect::<Vec<_>>().join(" ")
+                    }
+                    else {
+                        text.trim().to_string()
+                    };
+                    if next != *text {
+                        cell.value = CellValue::text(next);
+                        sheet.set_cell(cell);
+                        changed += 1;
+                    }
+                }
+            }
+            affected.push(json!({
+                "op": "range.trimText",
+                "sheet": sheet_name,
+                "range": range.reference(),
+                "changed": changed,
+            }));
+            0
+        }
         "sheet.duplicate" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;

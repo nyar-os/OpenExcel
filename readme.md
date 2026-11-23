@@ -43,7 +43,7 @@ open-excel export ledger.oexcel --format xlsx --out ledger.xlsx
 
 ## ✨ Highlights
 
-- **Cells and ranges.** Read one cell or a rectangle with evaluated values, formulas and cached results; write values, booleans, numbers, errors or formulas back; rewrite text case across a range; bind a rectangle to a workbook-scope defined name, rename or remove it, and list the names in the summary.
+- **Cells and ranges.** Read one cell or a rectangle with evaluated values, formulas and cached results; write values, booleans, numbers, errors or formulas back; rewrite text case and trim whitespace across a range; bind a rectangle to a workbook-scope defined name, rename or remove it, and list the names in the summary.
 - **Formulas and recalculation.** A built-in evaluator covers common aggregation, lookup, text, statistics and math functions. Unknown functions keep the value cached in the source file and are reported as `unsupported` instead of silently changing the result.
 - **Formatting and layout.** Apply bold, italic, font size, font color, fill, number format, alignment and wrap to a range; format numbers as currency, percent or dates with one kind-based operation; set column widths and row heights; hide rows or columns.
 - **Sorting, copying and filling.** Sort whole rows by a column, copy a range to a new anchor, transpose a block, fill a linear numeric or date series and clear a range.

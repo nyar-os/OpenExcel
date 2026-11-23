@@ -680,6 +680,53 @@ fn text_case_rewrites_text_cells_and_skips_formulas_and_numbers() {
 }
 
 #[test]
+fn trim_text_strips_and_collapses_whitespace() {
+    let created = engine::create(&json!({ "title": "Trim" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let edited = engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["  alpha  beta  "], ["\tgamma\n"], [{ "formula": "=LEN(A1)" }]] },
+                { "op": "range.trimText", "sheet": "Sheet1", "range": "A1:A3" },
+            ]
+        }),
+    )
+    .expect("trim");
+    assert_eq!(
+        edited["affected"].as_array().and_then(|entries| entries.last()).cloned(),
+        Some(json!({ "op": "range.trimText", "sheet": "Sheet1", "range": "A1:A3", "changed": 2 }))
+    );
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A1" })).expect("A1")["value"], json!("alpha  beta"));
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A2" })).expect("A2")["value"], json!("gamma"));
+
+    let collapsed = engine::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.trimText", "sheet": "Sheet1", "range": "A1:A2", "collapse": true }] }),
+    )
+    .expect("collapse");
+    assert_eq!(
+        collapsed["affected"].as_array().and_then(|entries| entries.last()).cloned(),
+        Some(json!({ "op": "range.trimText", "sheet": "Sheet1", "range": "A1:A2", "changed": 1 }))
+    );
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A1" })).expect("A1")["value"], json!("alpha beta"));
+    assert_eq!(
+        engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A3" })).expect("A3")["formula"],
+        json!("=LEN(A1)"),
+        "a formula cell is skipped"
+    );
+
+    for request in [
+        json!({ "operations": [{ "op": "range.trimText", "sheet": "Sheet1", "range": "nope" }] }),
+        json!({ "operations": [{ "op": "range.trimText", "sheet": "Sheet1", "range": "A1:A2", "collapse": "yes" }] }),
+    ] {
+        let error = engine::edit(handle, &request).expect_err("invalid trim request");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    engine::close(handle).expect("close");
+}
+
+#[test]
 fn defined_names_can_be_renamed_case_insensitively() {
     let created = engine::create(&json!({ "title": "Rename" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");

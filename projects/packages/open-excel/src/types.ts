@@ -664,6 +664,18 @@ export type EditOperation =
           readonly range: string;
           readonly case: 'upper' | 'lower' | 'title';
       }
+    | {
+          /**
+           * Trims leading and trailing whitespace from every text cell in
+           * `range`. With `collapse` it also folds internal runs of whitespace
+           * into single spaces. Formula cells and non-text values are skipped.
+           */
+          readonly op: 'range.trimText';
+          readonly sheet: string;
+          readonly range: string;
+          /** Collapse internal whitespace runs into single spaces. */
+          readonly collapse?: boolean;
+      }
     | { readonly op: 'sheet.add'; readonly name: string; readonly index?: number }
     | { readonly op: 'sheet.rename'; readonly sheet: string; readonly name: string }
     | { readonly op: 'sheet.remove'; readonly sheet: string }

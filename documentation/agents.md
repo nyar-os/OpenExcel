@@ -177,6 +177,7 @@ await reopened.dispose();
 | `column.setWidth` | `sheet`, `column`, `width` | `hidden` | Sets column width in Excel character units. |
 | `cell.replaceText` | `sheet`, `find`, `replace` | `range`, `matchCase`, `limit` | Replaces text in string cell values, skipping formulas, and reports the replacement count. `range` defaults to the used rectangle; `limit` caps occurrences in row-major order. Each call appends `{ op: "cell.replaceText", sheet, range, replaced }` to `affected`. |
 | `range.setTextCase` | `sheet`, `range`, `case` | — | Rewrites the case of every text cell in the rectangle; `case` is `upper`, `lower` or `title`. Formula cells and non-text values are skipped, and the call appends `{ op: "range.setTextCase", sheet, range, changed }` to `affected`. |
+| `range.trimText` | `sheet`, `range` | `collapse` | Trims leading and trailing whitespace from text cells; `collapse: true` also folds internal whitespace runs into single spaces. Formula cells and non-text values are skipped, and the call appends `{ op: "range.trimText", sheet, range, changed }` to `affected`. |
 
 The batch is atomic: every operation is validated before the first one is applied, and a successful batch advances `revision` once. `sheet` accepts a sheet name or id.
 
