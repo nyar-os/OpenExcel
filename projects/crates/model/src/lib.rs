@@ -1943,11 +1943,13 @@ fn fill_series(project: &mut Project, operation: &Value) -> Result<CellRange, Se
         None | Some(Value::Null) => "linear".to_owned(),
         Some(Value::String(text)) => text.trim().to_ascii_lowercase(),
         Some(_) => {
-            return Err(ServiceError::argument("`range.fillSeries` `kind` must be `linear` or `date`"));
+            return Err(ServiceError::argument("`range.fillSeries` `kind` must be `linear`, `date` or `growth`"));
         }
     };
-    if kind != "linear" && kind != "date" {
-        return Err(ServiceError::argument(format!("`{kind}` is not a series kind; expected `linear` or `date`")));
+    if kind != "linear" && kind != "date" && kind != "growth" {
+        return Err(ServiceError::argument(format!(
+            "`{kind}` is not a series kind; expected `linear`, `date` or `growth`"
+        )));
     }
     let vertical = match (range.rows() > 1, range.columns() > 1) {
         (true, false) => true,
@@ -1992,6 +1994,40 @@ fn fill_series(project: &mut Project, operation: &Value) -> Result<CellRange, Se
             _ => 1.0,
         },
     };
+    let ratio = if kind == "growth" {
+        let ratio = match optional_finite(operation, "ratio")? {
+            Some(ratio) => ratio,
+            None => match seeds.get(1) {
+                Some(CellValue::Number { number }) if start != 0.0 => number / start,
+                _ if start != 0.0 => 2.0,
+                _ => {
+                    return Err(ServiceError::argument(
+                        "a growth series starting at zero needs an explicit `ratio`",
+                    ));
+                }
+            },
+        };
+        if !ratio.is_finite() || ratio == 0.0 {
+            return Err(ServiceError::argument("a growth series `ratio` must be a finite, non-zero number"));
+        }
+        ratio
+    }
+    else {
+        if operation.get("ratio").is_some() {
+            return Err(ServiceError::argument("`ratio` only applies to a `growth` series"));
+        }
+        1.0
+    };
+    let values = if kind == "growth" {
+        let values = (0..coordinates.len()).map(|offset| start * ratio.powi(offset as i32)).collect::<Vec<_>>();
+        if values.iter().any(|value| !value.is_finite()) {
+            return Err(ServiceError::argument("the growth series overflows the sheet's numeric range"));
+        }
+        values
+    }
+    else {
+        (0..coordinates.len()).map(|offset| start + step * offset as f64).collect::<Vec<_>>()
+    };
     for (offset, (row, column)) in coordinates.iter().enumerate() {
         let mut style = sheet.cell(*row, *column).and_then(|cell| cell.style.clone());
         if kind == "date" {
@@ -2002,7 +2038,7 @@ fn fill_series(project: &mut Project, operation: &Value) -> Result<CellRange, Se
             reference: reference::format_reference(*row, *column),
             row: *row,
             column: *column,
-            value: CellValue::number(start + step * offset as f64),
+            value: CellValue::number(values[offset]),
             formula: None,
             cached: None,
             style,

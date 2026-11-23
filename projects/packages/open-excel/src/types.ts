@@ -788,11 +788,16 @@ export type EditOperation =
           readonly sheet: string;
           readonly range: string;
           /** Series kind; defaults to `'linear'`. */
-          readonly kind?: 'linear' | 'date';
+          readonly kind?: 'linear' | 'date' | 'growth';
           /** First value; defaults to the numeric first cell of `range`. */
           readonly start?: number;
           /** Step; defaults to the difference of the first two cells, else `1`. */
           readonly step?: number;
+          /**
+           * Multiplier of a `growth` series; defaults to the ratio of the first
+           * two numeric cells, else `2`. Refused for other kinds.
+           */
+          readonly ratio?: number;
       }
     | {
           /**

@@ -914,6 +914,54 @@ fn date_series_fill_writes_serials_with_a_date_format() {
 }
 
 #[test]
+fn growth_series_fill_multiplies_from_a_ratio_or_the_seeds() {
+    let project_path = temp_path("growth-series", "oexcel");
+    let created = engine::create(&json!({ "title": "GrowthSeries" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "value": 2 },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A2", "value": 6 },
+                { "op": "range.fillSeries", "sheet": "Sheet1", "range": "A1:A5", "kind": "growth" },
+                { "op": "range.fillSeries", "sheet": "Sheet1", "range": "B1:B3", "kind": "growth", "start": 100, "ratio": 0.5 },
+                { "op": "range.fillSeries", "sheet": "Sheet1", "range": "C1:C3", "kind": "growth", "start": 5 },
+            ]
+        }),
+    )
+    .expect("edit");
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    assert_eq!(cell_json(sheet, "A1")["value"]["number"], json!(2.0));
+    assert_eq!(cell_json(sheet, "A2")["value"]["number"], json!(6.0));
+    assert_eq!(cell_json(sheet, "A3")["value"]["number"], json!(18.0), "the seeds infer a ratio of 3");
+    assert_eq!(cell_json(sheet, "A5")["value"]["number"], json!(162.0));
+    assert_eq!(cell_json(sheet, "B3")["value"]["number"], json!(25.0), "an explicit ratio may shrink the series");
+    assert_eq!(cell_json(sheet, "C3")["value"]["number"], json!(20.0), "one seed defaults to doubling");
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn growth_series_fill_rejects_invalid_ratios() {
+    let created = engine::create(&json!({ "title": "GrowthSeriesInvalid" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let requests = [
+        json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "A1:A3", "kind": "growth", "start": 0 }] }),
+        json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "A1:A3", "kind": "growth", "start": 2, "ratio": 0 }] }),
+        json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "A1:A3", "kind": "linear", "start": 2, "ratio": 2 }] }),
+    ];
+    for request in requests {
+        let error = engine::edit(handle, &request).expect_err("invalid growth request");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    engine::close(handle).expect("close");
+}
+
+#[test]
 fn date_series_fill_rejects_invalid_kind_requests() {
     let created = engine::create(&json!({ "title": "DateSeriesInvalid" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");
