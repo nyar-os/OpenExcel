@@ -477,3 +477,88 @@ fn structural_edits_rewrite_qualifying_references_on_other_sheets_only() {
     assert_eq!(unqualified["formula"], json!("=A1"));
     engine::close(handle).expect("close");
 }
+
+#[test]
+fn format_number_lands_kind_codes_on_every_cell_in_the_range() {
+    let project_path = temp_path("format-number", "oexcel");
+    let created = engine::create(&json!({ "title": "NumberFormats" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "value": 1234.5 },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A2", "value": 0.25 },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A3", "value": 45000 },
+                { "op": "format.number", "sheet": "Sheet1", "range": "A1", "kind": "currency" },
+                { "op": "format.number", "sheet": "Sheet1", "range": "A2", "kind": "percent", "decimals": 1 },
+                { "op": "format.number", "sheet": "Sheet1", "range": "A3", "kind": "date" },
+                { "op": "format.number", "sheet": "Sheet1", "range": "B1", "kind": "plain", "decimals": 3 },
+                { "op": "format.number", "sheet": "Sheet1", "range": "B2", "kind": "currency", "symbol": "US$", "decimals": 0 },
+                { "op": "format.number", "sheet": "Sheet1", "range": "B3", "kind": "plain" },
+            ]
+        }),
+    )
+    .expect("edit");
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    assert_eq!(cell_json(sheet, "A1")["style"]["numberFormat"], json!("$#,##0.00"));
+    assert_eq!(cell_json(sheet, "A1")["value"]["number"], json!(1234.5), "the value stays untouched");
+    assert_eq!(cell_json(sheet, "A2")["style"]["numberFormat"], json!("0.0%"));
+    assert_eq!(cell_json(sheet, "A3")["style"]["numberFormat"], json!("yyyy-mm-dd"));
+    assert_eq!(cell_json(sheet, "B1")["style"]["numberFormat"], json!("0.000"));
+    assert_eq!(cell_json(sheet, "B2")["style"]["numberFormat"], json!("US$#,##0"));
+    assert_eq!(cell_json(sheet, "B3")["style"]["numberFormat"], json!("General"), "plain without decimals is General");
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn format_number_keeps_other_style_properties_and_fills_empty_cells() {
+    let project_path = temp_path("format-number-merge", "oexcel");
+    let created = engine::create(&json!({ "title": "NumberFormatMerge" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "format.set", "sheet": "Sheet1", "range": "A1:B1", "style": { "bold": true } },
+                { "op": "format.number", "sheet": "Sheet1", "range": "A1:C1", "kind": "currency", "decimals": 2 },
+            ]
+        }),
+    )
+    .expect("edit");
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    assert_eq!(cell_json(sheet, "A1")["style"]["bold"], json!(true), "the bold style survives");
+    assert_eq!(cell_json(sheet, "A1")["style"]["numberFormat"], json!("$#,##0.00"));
+    assert_eq!(cell_json(sheet, "C1")["style"]["numberFormat"], json!("$#,##0.00"), "an empty cell gains the format");
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn format_number_rejects_invalid_requests() {
+    let created = engine::create(&json!({ "title": "NumberFormatInvalid" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let requests = [
+        json!({ "operations": [{ "op": "format.number", "sheet": "Sheet1", "range": "A1:B2" }] }),
+        json!({ "operations": [{ "op": "format.number", "sheet": "Sheet1", "kind": "currency" }] }),
+        json!({ "operations": [{ "op": "format.number", "sheet": "Sheet1", "range": "nope", "kind": "currency" }] }),
+        json!({ "operations": [{ "op": "format.number", "sheet": "Sheet1", "range": "A1:B2", "kind": "accounting" }] }),
+        json!({ "operations": [{ "op": "format.number", "sheet": "Sheet1", "range": "A1:B2", "kind": "" }] }),
+        json!({ "operations": [{ "op": "format.number", "sheet": "Sheet1", "range": "A1:B2", "kind": "currency", "decimals": 13 }] }),
+        json!({ "operations": [{ "op": "format.number", "sheet": "Sheet1", "range": "A1:B2", "kind": "currency", "decimals": -1 }] }),
+        json!({ "operations": [{ "op": "format.number", "sheet": "Sheet1", "range": "A1:B2", "kind": "currency", "symbol": "" }] }),
+        json!({ "operations": [{ "op": "format.number", "sheet": "Sheet1", "range": "A1:B2", "kind": "currency", "symbol": 7 }] }),
+    ];
+    for request in requests {
+        let error = engine::edit(handle, &request).expect_err("invalid number format");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    engine::close(handle).expect("close");
+}

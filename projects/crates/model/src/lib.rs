@@ -1034,6 +1034,35 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             }
             0
         }
+        "format.number" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let range = operation
+                .get("range")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`format.number` needs an A1 range such as `A1:C4`"))?;
+            let code = number_format_code(operation)?;
+            let style = model::CellStyle { number_format: Some(code), ..model::CellStyle::default() };
+            for row in range.start_row..=range.end_row {
+                for column in range.start_column..=range.end_column {
+                    let mut cell = sheet.cell(row, column).cloned().unwrap_or_else(|| model::Cell {
+                        reference: reference::format_reference(row, column),
+                        row,
+                        column,
+                        value: CellValue::Empty,
+                        formula: None,
+                        cached: None,
+                        style: None,
+                        computed: None,
+                        computed_state: None,
+                    });
+                    cell.style = Some(merge_style(cell.style.as_ref(), &style));
+                    sheet.set_cell(cell);
+                }
+            }
+            0
+        }
         "merge.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
@@ -1952,6 +1981,56 @@ fn style_from_json(value: &Value) -> Result<model::CellStyle, ServiceError> {
         return Err(ServiceError::argument("`format.set` needs at least one style property"));
     }
     Ok(style)
+}
+
+/// Resolves the number format code a `format.number` request asks for.
+///
+/// `kind` selects the family: `currency` builds `<symbol>#,##0.<places>`,
+/// `percent` builds `0.<places>%`, `date` is the `yyyy-mm-dd` code and `plain`
+/// is `General` or a fixed-decimal `0.<places>` code. `decimals` caps at 12.
+fn number_format_code(operation: &Value) -> Result<String, ServiceError> {
+    let kind = operation
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty())
+        .ok_or_else(|| ServiceError::argument("`format.number` needs `kind` set to `currency`, `percent`, `date` or `plain`"))?;
+    let decimals = match operation.get("decimals") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|decimals| u32::try_from(decimals).ok())
+                .filter(|decimals| *decimals <= 12)
+                .ok_or_else(|| ServiceError::argument("`decimals` must be an integer between 0 and 12"))?,
+        ),
+    };
+    let fraction = |places: u32| if places > 0 { format!(".{}", "0".repeat(places as usize)) } else { String::new() };
+    match kind.to_ascii_lowercase().as_str() {
+        "currency" => {
+            let symbol = match operation.get("symbol") {
+                None | Some(Value::Null) => "$".to_owned(),
+                Some(Value::String(symbol)) => {
+                    let symbol = symbol.trim();
+                    if symbol.is_empty() || symbol.chars().count() > 3 {
+                        return Err(ServiceError::argument("`symbol` must be a non-empty string of at most three characters"));
+                    }
+                    symbol.to_owned()
+                }
+                Some(_) => return Err(ServiceError::argument("`symbol` must be a string")),
+            };
+            Ok(format!("{symbol}#,##0{}", fraction(decimals.unwrap_or(2))))
+        }
+        "percent" => Ok(format!("0{}%", fraction(decimals.unwrap_or(2)))),
+        "date" => Ok("yyyy-mm-dd".to_owned()),
+        "plain" => Ok(match decimals {
+            Some(places) if places > 0 => format!("0.{}", "0".repeat(places as usize)),
+            _ => "General".to_owned(),
+        }),
+        _ => Err(ServiceError::argument(format!(
+            "`{kind}` is not a number format kind; expected `currency`, `percent`, `date` or `plain`"
+        ))),
+    }
 }
 
 fn optional_bool(object: &Map<String, Value>, key: &str) -> Result<Option<bool>, ServiceError> {

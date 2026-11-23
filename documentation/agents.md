@@ -158,6 +158,7 @@ await reopened.dispose();
 | `format.copy` | `sheet`, `source` (one cell), `target` | Copies the source cell's style onto every target cell, keeping values and formulas. |
 | `format.set` | `sheet`, `range`, `style` | — | Applies `bold`, `italic`, `fontSize`, `fontColor`, `fill`, `numberFormat`, `align`, `wrap`. |
 | `format.clear` | `sheet`, `range` | — | Removes every cell style in the rectangle, keeping values and formulas. |
+| `format.number` | `sheet`, `range`, `kind` | `decimals`, `symbol` | Applies the number format built from `kind`: `currency` (`$#,##0.00`, `symbol` replaces `$`), `percent` (`0.00%`), `date` (`yyyy-mm-dd`) or `plain` (`General`); `decimals` (0-12) sets the fraction digits. Other style properties stay. |
 | `merge.set` | `sheet`, `start`, `end`, `merge` | — | Merges or unmerges the rectangle. |
 | `sheet.freeze` | `sheet`, and `cell` or `rows`+`columns` or `clear` | — | Freezes rows/columns or clears the pane. `C2` means 1 row and 2 columns. |
 | `sheet.setVisibility` | `sheet`, `visibility` | — | `visible`, `hidden` or `veryHidden`; the last visible sheet cannot be hidden. |

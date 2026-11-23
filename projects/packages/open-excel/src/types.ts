@@ -487,6 +487,25 @@ export type EditOperation =
           readonly target: string;
       }
     | {
+          /**
+           * Applies a number format built from `kind` to every cell in `range`,
+           * keeping the other style properties. `currency` yields
+           * `<symbol>#,##0.<places>` (default symbol `$`), `percent` yields
+           * `0.<places>%`, `date` yields `yyyy-mm-dd` and `plain` yields
+           * `General`, or `0.<places>` when `decimals` is positive.
+           */
+          readonly op: 'format.number';
+          readonly sheet: string;
+          /** A1 range such as `A1:C4`. */
+          readonly range: string;
+          /** Number format family to build the code from. */
+          readonly kind: 'currency' | 'percent' | 'date' | 'plain';
+          /** Fraction digits, 0-12; defaults to 2 for `currency` and `percent`. */
+          readonly decimals?: number;
+          /** Currency prefix for `kind: 'currency'`; defaults to `$`. */
+          readonly symbol?: string;
+      }
+    | {
           /** Merges `start:end` when `merge` is true and unmerges it otherwise. */
           readonly op: 'merge.set';
           readonly sheet: string;
