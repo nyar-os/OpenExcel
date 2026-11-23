@@ -402,6 +402,7 @@ export interface AffectedRange {
  * relative references inside formulas are not rewritten. The source is
  * snapshotted before writing, so overlapping source and target stay
  * deterministic; merged ranges intersecting either rectangle are rejected.
+ * `targetSheet` writes into another sheet and leaves the source untouched.
  */
 export interface RangeCopyOperation {
     readonly op: 'range.copy';
@@ -409,6 +410,8 @@ export interface RangeCopyOperation {
     readonly range: string;
     /** Top-left cell of the destination rectangle. */
     readonly target: CellAddress;
+    /** Destination sheet; the source sheet when omitted. */
+    readonly targetSheet?: string;
 }
 
 /**

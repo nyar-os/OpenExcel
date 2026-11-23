@@ -148,7 +148,7 @@ await reopened.dispose();
 | `cell.clear` | `sheet`, `reference` | `keepStyle` | Clears one cell's value, formula and cached result. With `keepStyle` a styled cell stays with its formatting and an empty value; otherwise the cell is removed entirely. |
 | `range.set` | `sheet`, `start`, `rows` | — | Writes a matrix of literals, formulas or `null` to clear. |
 | `range.append` | `sheet`, `rows`, `start?` | — | Writes the matrix below the sheet's last populated row; the first column comes from `start` (default `A1`). |
-| `range.copy` | `sheet`, `range`, `target` | — | Copies into the rectangle anchored at `target` and keeps the source. |
+| `range.copy` | `sheet`, `range`, `target` | `targetSheet` | Copies into the rectangle anchored at `target` and keeps the source. `targetSheet` writes into another sheet instead. |
 | `range.move` | `sheet`, `range`, `target` | — | Moves into the rectangle anchored at `target` and clears the source. |
 | `range.swap` | `sheet`, `range`, `target` | — | Exchanges the rectangle with the equal-sized rectangle anchored at `target`. |
 | `range.flip` | `sheet`, `range`, `axis` | — | Mirrors the rectangle in place; `horizontal` swaps columns, `vertical` swaps rows. |
@@ -230,7 +230,7 @@ CLI usage failures add `open-excel.cli.*` codes such as `open-excel.cli.file-req
 - `open()` accepts a path only. In-memory `bytes` and intents other than `edit` are rejected with `format/unsupported`.
 - Supported imports: `.oexcel`, `.xlsx`, `.xlsm`, `.csv`, `.tsv`. `.xlsm` imports but does not export.
 - Export targets: `xlsx`, `csv`, `tsv`, `json`, `html`, `pdf`. CSV, TSV, JSON and HTML write the primary sheet only and report every other sheet as a loss. PDF is partial (`style-approximated`, `no-images`).
-- `range.copy` copies values, formula sources, cached results and styles verbatim; relative references inside formulas are not rewritten. A merged range touching the source or destination is rejected.
+- `range.copy` copies values, formula sources, cached results and styles verbatim; relative references inside formulas are not rewritten. A merged range touching the source or destination is rejected. `targetSheet` selects another destination sheet; the source sheet's cells are not touched, and the target sheet's merges are checked instead of the source rectangle.
 - `range.move` snapshots the block, clears both rectangles, then writes the snapshot, so an overlapping destination is deterministic. A merged range touching either rectangle is rejected.
 - `range.swap` snapshots both rectangles before clearing either, reports their bounding rectangle as affected, and rejects merged ranges touching either side.
 - `range.flip` snapshots the rectangle before clearing it, keeps values, formula sources, cached results and styles with their cells, and rejects merged ranges inside the rectangle. A single row flipped vertically or a single column flipped horizontally is a no-op that still reports the rectangle.
