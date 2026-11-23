@@ -1199,3 +1199,155 @@ fn remove_empty_columns_compacts_only_columns_without_cells() {
     engine::close(handle).expect("close");
     let _ = fs::remove_file(project_path);
 }
+
+#[test]
+fn fill_down_copies_values_styles_and_formulas() {
+    let project_path = temp_path("fill-down", "oexcel");
+    let created = engine::create(&json!({ "title": "Fill" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let edited = engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    ["top", 1, { "formula": "=B1*2" }],
+                    ["old", 2, null],
+                    ["old", 3, null],
+                    ["old", 4, null]
+                ] },
+                { "op": "format.set", "sheet": "Sheet1", "range": "A1:C1", "style": { "bold": true, "fill": "#ffcc00" } },
+                { "op": "range.fill", "sheet": "Sheet1", "range": "A1:C4", "direction": " DOWN " },
+            ]
+        }),
+    )
+    .expect("fill down");
+    assert_eq!(
+        edited["affected"].as_array().and_then(|entries| entries.last()).cloned(),
+        Some(json!({ "op": "range.fill", "sheet": "Sheet1", "range": "A1:C4" }))
+    );
+
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    assert_eq!(cell_json(sheet, "A1")["value"]["text"], json!("top"), "the source row is untouched");
+    assert_eq!(cell_json(sheet, "A2")["value"]["text"], json!("top"));
+    assert_eq!(cell_json(sheet, "A4")["value"]["text"], json!("top"));
+    assert_eq!(cell_json(sheet, "B4")["value"]["number"], json!(1.0));
+    assert_eq!(cell_json(sheet, "C4")["formula"], json!("=B1*2"), "formula text is copied verbatim");
+    assert_eq!(cell_json(sheet, "C4")["reference"], json!("C4"), "the reference follows the target");
+    assert_eq!(cell_json(sheet, "B3")["style"]["bold"], json!(true), "styles travel with the source cell");
+    assert_eq!(cell_json(sheet, "C2")["style"]["fill"], json!("#ffcc00"));
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn fill_clears_targets_of_blank_source_cells() {
+    let project_path = temp_path("fill-blank", "oexcel");
+    let created = engine::create(&json!({ "title": "FillBlank" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [[null, 5], ["stale", "stale"]] },
+                { "op": "format.set", "sheet": "Sheet1", "range": "A2", "style": { "bold": true } },
+                { "op": "range.fill", "sheet": "Sheet1", "range": "A1:B2", "direction": "down" },
+            ]
+        }),
+    )
+    .expect("fill down");
+
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    assert_eq!(cell_json(sheet, "B2")["value"]["number"], json!(5.0));
+    assert!(
+        sheet["cells"].as_array().unwrap().iter().all(|cell| cell["reference"] != "A2"),
+        "a blank source cell clears its target, including the old style: {sheet}"
+    );
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn fill_right_left_and_up_copy_the_opposite_edge() {
+    let created = engine::create(&json!({ "title": "FillEdges" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let edited = engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["left", "old1", "old2"]] },
+                { "op": "range.set", "sheet": "Sheet1", "start": "A3", "rows": [["old1", "old2", "right"]] },
+                { "op": "range.set", "sheet": "Sheet1", "start": "A5", "rows": [["old1"], ["old2"], ["bottom"]] },
+                { "op": "range.fill", "sheet": "Sheet1", "range": "A1:C1", "direction": "right" },
+                { "op": "range.fill", "sheet": "Sheet1", "range": "A3:C3", "direction": "LEFT" },
+                { "op": "range.fill", "sheet": "Sheet1", "range": "A5:A7", "direction": "up" },
+            ]
+        }),
+    )
+    .expect("fill edges");
+    assert!(
+        edited["affected"].as_array().unwrap().iter().all(|entry| entry["op"] == json!("range.fill")),
+        "every fill is reported: {edited}"
+    );
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "B1" })).expect("B1")["value"], json!("left"));
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "C1" })).expect("C1")["value"], json!("left"));
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A3" })).expect("A3")["value"], json!("right"));
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "B3" })).expect("B3")["value"], json!("right"));
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A5" })).expect("A5")["value"], json!("bottom"));
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A6" })).expect("A6")["value"], json!("bottom"));
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A7" })).expect("A7")["value"], json!("bottom"));
+    engine::close(handle).expect("close");
+}
+
+#[test]
+fn fill_rejects_bad_directions_and_merged_ranges_but_single_lines_are_no_ops() {
+    let created = engine::create(&json!({ "title": "FillErrors" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["one", "two", "three"]] },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "E1", "end": "F2", "merge": true },
+            ]
+        }),
+    )
+    .expect("seed");
+    let revision = engine::summary(handle).expect("summary")["revision"].as_u64().expect("revision");
+    for request in [
+        json!({ "operations": [{ "op": "range.fill", "sheet": "Sheet1", "range": "A1:C1", "direction": "sideways" }] }),
+        json!({ "operations": [{ "op": "range.fill", "sheet": "Sheet1", "range": "A1:C1", "direction": " " }] }),
+        json!({ "operations": [{ "op": "range.fill", "sheet": "Sheet1", "range": "A1:C1" }] }),
+        json!({ "operations": [{ "op": "range.fill", "sheet": "Sheet1", "range": "E1:F2", "direction": "down" }] }),
+        json!({ "operations": [{ "op": "range.fill", "sheet": "Sheet1", "range": "nope", "direction": "down" }] }),
+    ] {
+        let error = engine::edit(handle, &request).expect_err("invalid fill request");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    assert_eq!(engine::summary(handle).expect("summary")["revision"].as_u64().expect("revision"), revision);
+
+    let edited = engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.fill", "sheet": "Sheet1", "range": "A1:C1", "direction": "down" },
+                { "op": "range.fill", "sheet": "Sheet1", "range": "A1:A3", "direction": "left" },
+            ]
+        }),
+    )
+    .expect("single-line fills are no-ops");
+    assert_eq!(
+        edited["affected"],
+        json!([
+            { "op": "range.fill", "sheet": "Sheet1", "range": "A1:C1" },
+            { "op": "range.fill", "sheet": "Sheet1", "range": "A1:A3" },
+        ])
+    );
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A1" })).expect("A1")["value"], json!("one"));
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "B1" })).expect("B1")["value"], json!("two"));
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "C1" })).expect("C1")["value"], json!("three"));
+    engine::close(handle).expect("close");
+}

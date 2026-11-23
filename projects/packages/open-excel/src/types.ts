@@ -386,6 +386,7 @@ export interface AffectedRange {
         | 'range.move'
         | 'range.swap'
         | 'range.flip'
+        | 'range.fill'
         | 'cell.replaceText';
     readonly sheet: string;
     /** A1 rectangle such as `A1:A5`. */
@@ -465,6 +466,25 @@ export interface RangeFlipOperation {
     readonly range: string;
     /** `horizontal` mirrors columns; `vertical` mirrors rows. */
     readonly axis: 'horizontal' | 'vertical';
+}
+
+/**
+ * Fills `range` from one of its edges.
+ *
+ * `down` copies the top row into every row below it, `up` the bottom row into
+ * every row above, `right` the left column into every column to its right and
+ * `left` the right column into every column to its left. Cell contents, styles,
+ * cached results and formula sources travel verbatim, while relative references
+ * inside formulas are not rewritten. A blank source cell clears its target and
+ * the source edge keeps its cells; merged cells inside the rectangle are
+ * rejected. A single row filled up or down and a single column filled left or
+ * right are no-ops.
+ */
+export interface RangeFillOperation {
+    readonly op: 'range.fill';
+    readonly sheet: string;
+    readonly range: string;
+    readonly direction: 'down' | 'up' | 'left' | 'right';
 }
 
 /** One operation of `Workbook.edit()`. */
@@ -818,6 +838,7 @@ export type EditOperation =
     | RangeMoveOperation
     | RangeSwapOperation
     | RangeFlipOperation
+    | RangeFillOperation
     | { readonly op: 'range.clear'; readonly sheet: string; readonly range: string };
 
 /** Request of `Workbook.edit()`. */

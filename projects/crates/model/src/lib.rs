@@ -1040,6 +1040,11 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             affected.push(range_effect(project, operation, "range.flip", &written));
             0
         }
+        "range.fill" => {
+            let written = fill_range(project, operation)?;
+            affected.push(range_effect(project, operation, "range.fill", &written));
+            0
+        }
         "range.set" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
@@ -2448,6 +2453,90 @@ fn flip_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
         }
     }
     Ok(range)
+}
+
+/// Fills the rest of a rectangle from one of its edges.
+///
+/// `down` copies the top row into every row below, `up` the bottom row into
+/// every row above, `right` the left column into every column to its right and
+/// `left` the right column into every column to its left. Cell contents, styles,
+/// cached results and formula sources travel verbatim; relative references
+/// inside formulas are not rewritten. A blank source cell clears its target,
+/// while the source edge itself keeps its cells. Merged ranges inside the
+/// rectangle are rejected. A single row filled up or down and a single column
+/// filled left or right are no-ops that still report the rectangle.
+fn fill_range(project: &mut Project, operation: &Value) -> Result<CellRange, ServiceError> {
+    let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+    let range = operation
+        .get("range")
+        .and_then(Value::as_str)
+        .and_then(reference::parse_range)
+        .ok_or_else(|| ServiceError::argument("`range.fill` needs an A1 range such as `A1:C4`"))?;
+    if !range.is_valid() || range.end_row > 1_048_576 || range.end_column > 16_384 {
+        return Err(ServiceError::argument(format!("fill range `{}` leaves the sheet grid", range.reference())));
+    }
+    let requested = operation
+        .get("direction")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|direction| !direction.is_empty())
+        .ok_or_else(|| ServiceError::argument("`range.fill` needs `direction` set to `down`, `up`, `left` or `right`"))?;
+    let direction = requested.to_ascii_lowercase();
+    let vertical = match direction.as_str() {
+        "down" | "up" => true,
+        "left" | "right" => false,
+        _ => {
+            return Err(ServiceError::argument(format!(
+                "`{requested}` is not a fill direction; expected `down`, `up`, `left` or `right`"
+            )));
+        }
+    };
+    let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+    if let Some(merged) = sheet.merged.iter().find(|merged| merged.overlaps(&range)) {
+        return Err(ServiceError::argument(format!("`range.fill` cannot fill merged range `{}`", merged.reference())));
+    }
+    let from_start = matches!(direction.as_str(), "down" | "right");
+    if vertical {
+        if range.rows() == 1 {
+            return Ok(range);
+        }
+        let source_row = if from_start { range.start_row } else { range.end_row };
+        let target_rows =
+            if from_start { range.start_row + 1..=range.end_row } else { range.start_row..=range.end_row - 1 };
+        for row in target_rows {
+            for column in range.start_column..=range.end_column {
+                fill_cell(sheet, source_row, column, row, column);
+            }
+        }
+    }
+    else {
+        if range.columns() == 1 {
+            return Ok(range);
+        }
+        let source_column = if from_start { range.start_column } else { range.end_column };
+        let target_columns =
+            if from_start { range.start_column + 1..=range.end_column } else { range.start_column..=range.end_column - 1 };
+        for row in range.start_row..=range.end_row {
+            for column in target_columns.clone() {
+                fill_cell(sheet, row, source_column, row, column);
+            }
+        }
+    }
+    Ok(range)
+}
+
+/// Copies one source cell onto a fill target, leaving a blank source to clear the target.
+fn fill_cell(sheet: &mut Sheet, source_row: u32, source_column: u32, row: u32, column: u32) {
+    let copied = sheet.cell(source_row, source_column).cloned().map(|mut cell| {
+        cell.row = row;
+        cell.column = column;
+        cell.reference = reference::format_reference(row, column);
+        cell
+    });
+    match copied {
+        Some(cell) => sheet.set_cell(cell),
+        None => sheet.clear_range(&CellRange::between(row, column, row, column)),
+    }
 }
 
 /// Reads a finite numeric field of an operation.
