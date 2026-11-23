@@ -446,6 +446,8 @@ export interface RangeSwapOperation {
     readonly range: string;
     /** Top-left cell of the second, equal-sized rectangle. */
     readonly target: CellAddress;
+    /** Destination sheet for the second rectangle; the source sheet when omitted. */
+    readonly targetSheet?: string;
 }
 
 /**

@@ -1258,6 +1258,79 @@ fn range_copy_can_write_into_another_sheet() {
 }
 
 #[test]
+fn range_swap_can_exchange_cells_with_another_sheet() {
+    let created = open_excel_workbook::create(&json!({ "title": "Swap" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "sheet.add", "name": "Notes" },
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    ["name", "total"],
+                    ["alpha", { "formula": "=1+2" }],
+                ] },
+                { "op": "format.set", "sheet": "Sheet1", "range": "A1:B2", "style": { "bold": true } },
+                { "op": "range.set", "sheet": "Notes", "start": "D4", "rows": [
+                    ["other", 1],
+                    ["value", 2],
+                ] },
+            ]
+        }),
+    )
+    .expect("seed");
+
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [{ "op": "range.swap", "sheet": "Sheet1", "range": "A1:B2", "target": "D4", "targetSheet": "Notes" }]
+        }),
+    )
+    .expect("swap across sheets");
+
+    let project = project_of(handle);
+    let source = project.sheet("Sheet1").expect("source sheet");
+    assert_eq!(source.cell(1, 1).expect("A1").value, CellValue::text("other"));
+    assert_eq!(source.cell(1, 2).expect("B1").value, CellValue::number(1.0));
+    assert_eq!(source.cell(2, 1).expect("A2").value, CellValue::text("value"));
+    assert_eq!(source.cell(2, 2).expect("B2").value, CellValue::number(2.0));
+    let target = project.sheet("Notes").expect("target sheet");
+    assert_eq!(target.cell(4, 4).expect("D4").value, CellValue::text("name"));
+    assert_eq!(target.cell(5, 4).expect("D5").value, CellValue::text("alpha"));
+    let moved = target.cell(5, 5).expect("E5");
+    assert_eq!(moved.formula.as_deref(), Some("=1+2"), "formula sources travel verbatim");
+    assert_eq!(moved.computed, Some(CellValue::number(3.0)));
+    assert_eq!(target.cell(4, 4).and_then(|cell| cell.style.as_ref()).and_then(|style| style.bold), Some(true));
+
+    let before = open_excel_workbook::summary(handle).expect("summary")["revision"].clone();
+    for operation in [
+        json!({ "op": "range.swap", "sheet": "Sheet1", "range": "A1:B1", "target": "A1", "targetSheet": "Missing" }),
+        json!({ "op": "range.swap", "sheet": "Sheet1", "range": "A1:B2", "target": "A1048576", "targetSheet": "Notes" }),
+    ] {
+        let error = open_excel_workbook::edit(handle, &json!({ "operations": [operation] })).expect_err("bad target");
+        assert!(error.code == "object/not-found" || error.code == "session/argument-invalid");
+    }
+    assert_eq!(
+        open_excel_workbook::summary(handle).expect("summary")["revision"],
+        before,
+        "failed swaps consume no revision"
+    );
+
+    open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "merge.set", "sheet": "Notes", "start": "G1", "end": "H1", "merge": true }] }),
+    )
+    .expect("merge target");
+    let merged = open_excel_workbook::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.swap", "sheet": "Sheet1", "range": "A1:B1", "target": "G1", "targetSheet": "Notes" }] }),
+    )
+    .expect_err("merged target");
+    assert_eq!(merged.code, "session/argument-invalid");
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
 fn range_move_can_write_into_another_sheet() {
     let created = open_excel_workbook::create(&json!({ "title": "Move" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");

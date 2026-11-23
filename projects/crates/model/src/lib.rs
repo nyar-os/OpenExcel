@@ -2286,8 +2286,10 @@ fn move_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
 /// Cell contents, styles and formula sources travel verbatim; relative
 /// references inside formulas are not rewritten. Both rectangles are
 /// snapshotted before either is cleared, so overlapping rectangles stay
-/// deterministic. Merges are rejected because swapped cells would lose their
-/// shape. The reported range is the bounding rectangle of both rectangles.
+/// deterministic. `targetSheet` swaps with another sheet and replaces the
+/// source rectangle there. Merges are rejected because swapped cells would lose
+/// their shape. The reported range is the bounding rectangle of both rectangles
+/// on one sheet, or the target rectangle when the swap crosses sheets.
 fn swap_range(project: &mut Project, operation: &Value) -> Result<CellRange, ServiceError> {
     let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
     let range = operation
@@ -2312,51 +2314,67 @@ fn swap_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
         .filter(|column| *column <= 16_384)
         .ok_or_else(|| ServiceError::argument("the swapped range leaves the sheet grid"))?;
     let destination = CellRange { start_row: target_row, end_row, start_column: target_column, end_column };
-    let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
-    if let Some(merged) = sheet.merged.iter().find(|merged| merged.overlaps(&range) || merged.overlaps(&destination)) {
+    let target_key = operation
+        .get("targetSheet")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|sheet| !sheet.is_empty())
+        .unwrap_or(key);
+    let source_index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;
+    let target_index = project.sheet_index(target_key).ok_or_else(|| missing_sheet(target_key))?;
+    let same_sheet = source_index == target_index;
+    let source = &project.sheets[source_index];
+    let blocked = if same_sheet {
+        source.merged.iter().find(|merged| merged.overlaps(&range) || merged.overlaps(&destination))
+    }
+    else {
+        source.merged.iter().find(|merged| merged.overlaps(&range))
+    };
+    if let Some(merged) = blocked {
         return Err(ServiceError::argument(format!("`range.swap` cannot swap merged range `{}`", merged.reference())));
     }
-    if destination == range {
+    if !same_sheet {
+        let target = &project.sheets[target_index];
+        if let Some(merged) = target.merged.iter().find(|merged| merged.overlaps(&destination)) {
+            return Err(ServiceError::argument(format!(
+                "`range.swap` cannot swap merged range `{}`",
+                merged.reference()
+            )));
+        }
+    }
+    if same_sheet && destination == range {
         return Ok(range);
     }
-    let snapshot = |rect: &CellRange| -> Vec<Vec<Option<model::Cell>>> {
+    let snapshot = |sheet: &model::Sheet, rect: &CellRange| -> Vec<Vec<Option<model::Cell>>> {
         (rect.start_row..=rect.end_row)
             .map(|row| (rect.start_column..=rect.end_column).map(|column| sheet.cell(row, column).cloned()).collect())
             .collect()
     };
-    let source_cells = snapshot(&range);
-    let target_cells = snapshot(&destination);
-    sheet.clear_range(&range);
-    sheet.clear_range(&destination);
-    for (row_offset, row) in target_cells.iter().enumerate() {
-        for (column_offset, cell) in row.iter().enumerate() {
-            let Some(cell) = cell.clone()
-            else {
-                continue;
-            };
-            let row = range.start_row + row_offset as u32;
-            let column = range.start_column + column_offset as u32;
-            let mut moved = cell;
-            moved.row = row;
-            moved.column = column;
-            moved.reference = reference::format_reference(row, column);
-            sheet.set_cell(moved);
+    let source_cells = snapshot(source, &range);
+    let target_cells = snapshot(&project.sheets[target_index], &destination);
+    project.sheets[source_index].clear_range(&range);
+    project.sheets[target_index].clear_range(&destination);
+    let writes = [(source_index, &range, &target_cells), (target_index, &destination, &source_cells)];
+    for (sheet_index, rect, cells) in writes {
+        let sheet = &mut project.sheets[sheet_index];
+        for (row_offset, row) in cells.iter().enumerate() {
+            for (column_offset, cell) in row.iter().enumerate() {
+                let Some(cell) = cell.clone()
+                else {
+                    continue;
+                };
+                let row = rect.start_row + row_offset as u32;
+                let column = rect.start_column + column_offset as u32;
+                let mut moved = cell;
+                moved.row = row;
+                moved.column = column;
+                moved.reference = reference::format_reference(row, column);
+                sheet.set_cell(moved);
+            }
         }
     }
-    for (row_offset, row) in source_cells.iter().enumerate() {
-        for (column_offset, cell) in row.iter().enumerate() {
-            let Some(cell) = cell.clone()
-            else {
-                continue;
-            };
-            let row = destination.start_row + row_offset as u32;
-            let column = destination.start_column + column_offset as u32;
-            let mut moved = cell;
-            moved.row = row;
-            moved.column = column;
-            moved.reference = reference::format_reference(row, column);
-            sheet.set_cell(moved);
-        }
+    if !same_sheet {
+        return Ok(destination);
     }
     Ok(CellRange::between(
         range.start_row.min(destination.start_row),
