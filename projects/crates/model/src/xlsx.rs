@@ -120,6 +120,7 @@ pub fn project_from_workbook(workbook: XlsxWorkbook, title: impl Into<String>) -
         title: title.into(),
         styles: Styles { number_formats, cell_formats },
         sheets,
+        names: Vec::new(),
     };
     project.reindex();
     project

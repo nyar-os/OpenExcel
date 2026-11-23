@@ -33,7 +33,7 @@ use serde_json::{Map, Value, json};
 
 pub use error::ServiceError;
 
-use model::{CellRange, CellValue, PROJECT_FORMAT, PROJECT_VERSION, Project, Sheet, SheetColumn, SheetRow};
+use model::{CellRange, CellValue, NamedRange, PROJECT_FORMAT, PROJECT_VERSION, Project, Sheet, SheetColumn, SheetRow};
 
 /// Workbook formats the product classifies.
 pub const WORKBOOK_FORMATS: &[&str] = &["xlsx", "xlsm", "xltx", "xls", "csv", "tsv", "ods", "json", "xml", "pdf"];
@@ -191,6 +191,11 @@ fn summary_json(handle: u64, entry: &store::Entry) -> Value {
             "hidden": !sheet.visibility.is_visible(),
             "cells": sheet.non_empty_cells(),
             "autoFilter": sheet.auto_filter.as_ref().map(CellRange::reference),
+        })).collect::<Vec<_>>(),
+        "names": entry.project.names.iter().map(|named| json!({
+            "name": named.name,
+            "sheet": entry.project.sheet(&named.sheet).map(|sheet| sheet.name.clone()).unwrap_or_default(),
+            "range": named.range.reference(),
         })).collect::<Vec<_>>(),
         "cells": entry.project.cell_count(),
     })
@@ -710,7 +715,9 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             if project.sheets.len() == 1 {
                 return Err(ServiceError::argument("a workbook must keep at least one sheet"));
             }
+            let id = project.sheets[index].id.clone();
             project.sheets.remove(index);
+            project.names.retain(|named| named.sheet != id);
             project.reindex();
             0
         }
@@ -752,6 +759,53 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                 Some(_) => return Err(ServiceError::argument("`range` must be an A1 range string or `null`")),
             };
             sheet.auto_filter = filter;
+            0
+        }
+        "name.define" => {
+            let name = operation
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| ServiceError::argument("`name.define` needs a non-empty `name`"))?;
+            if reference::parse_reference(name).is_some() || name.contains(':') {
+                return Err(ServiceError::argument(format!(
+                    "`{name}` looks like a cell reference; a defined name must not"
+                )));
+            }
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;
+            let range = operation
+                .get("range")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`name.define` needs an A1 range such as `A1:C4`"))?;
+            if !range.is_valid() || range.end_row > 1_048_576 || range.end_column > 16_384 {
+                return Err(ServiceError::argument(format!("named range `{}` leaves the sheet grid", range.reference())));
+            }
+            let sheet_id = project.sheets[index].id.clone();
+            match project.names.iter_mut().find(|named| named.name.eq_ignore_ascii_case(name)) {
+                Some(existing) => {
+                    existing.name = name.to_owned();
+                    existing.sheet = sheet_id;
+                    existing.range = range;
+                }
+                None => project.names.push(NamedRange { name: name.to_owned(), sheet: sheet_id, range }),
+            }
+            0
+        }
+        "name.remove" => {
+            let name = operation
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| ServiceError::argument("`name.remove` needs a non-empty `name`"))?;
+            let before = project.names.len();
+            project.names.retain(|named| !named.name.eq_ignore_ascii_case(name));
+            if project.names.len() == before {
+                return Err(ServiceError::new("object/not-found", format!("defined name `{name}` does not exist")));
+            }
             0
         }
         "range.clear" => {

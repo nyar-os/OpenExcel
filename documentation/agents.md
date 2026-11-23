@@ -163,6 +163,8 @@ await reopened.dispose();
 | `sheet.freeze` | `sheet`, and `cell` or `rows`+`columns` or `clear` | — | Freezes rows/columns or clears the pane. `C2` means 1 row and 2 columns. |
 | `sheet.setVisibility` | `sheet`, `visibility` | — | `visible`, `hidden` or `veryHidden`; the last visible sheet cannot be hidden. |
 | `sheet.setAutoFilter` | `sheet`, `range` | — | Declares the sheet autofilter (an A1 range such as `A1:D20`); `null` clears it. |
+| `name.define` | `name`, `sheet`, `range` | — | Defines a workbook-scope name bound to the rectangle, or redefines the existing name when it matches case-insensitively. The name must not look like a cell reference. |
+| `name.remove` | `name` | — | Removes a defined name case-insensitively; an unknown name fails with `object/not-found`. |
 | `sheet.add` | `name` | `index` | Adds a sheet. |
 | `sheet.rename` | `sheet`, `name` | — | Renames a sheet. |
 | `sheet.remove` | `sheet` | — | Removes a sheet; the last sheet cannot be removed. |
@@ -228,6 +230,7 @@ CLI usage failures add `open-excel.cli.*` codes such as `open-excel.cli.file-req
 - `range.fillSeries` needs exactly one row or one column; merged ranges in the way are rejected.
 - `range.sort` sorts numbers before text, text before booleans, and leaves blanks trailing; it refuses ranges that overlap a merged range.
 - Structural edits (`row.*`, `column.*`) move merged ranges, frozen panes, row heights, column widths and formula references. Deleted reference targets become `#REF!`.
+- Defined names (`name.*`) are workbook-scope. They move with row and column inserts and deletes like merged ranges; a name whose whole range is deleted, or whose sheet is removed, is dropped. Names live in the native `.oexcel` project only and are not written to XLSX.
 - Unknown formula functions keep the cached source value and set `computedState: "unsupported"`; they never invent a result.
 - `find` returns at most 500 hits and sets `truncated: true` when more exist.
 - `save` and most mutating commands need an explicit `--overwrite` (or `overwrite: true`) to replace an existing file. `export` has no overwrite option at all.

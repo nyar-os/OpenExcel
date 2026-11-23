@@ -130,6 +130,15 @@ export interface CellSummary {
     readonly value: string | number | boolean | null;
 }
 
+/** One workbook-scope defined name bound to a rectangle on one sheet. */
+export interface NamedRange {
+    readonly name: string;
+    /** Name of the sheet the range lives on. */
+    readonly sheet: string;
+    /** A1 range such as `A1:C4`. */
+    readonly range: string;
+}
+
 /**
  * Opened workbook summary. `revision` is monotonic and changes on every
  * committed mutation, so callers can reject a stale writer.
@@ -139,6 +148,8 @@ export interface Workbook {
     readonly revision: number;
     readonly title: string | null;
     readonly sheets: readonly SheetSummary[];
+    /** Defined names, ordered case-insensitively by name. */
+    readonly names: readonly NamedRange[];
     /** Total non-empty cells across every sheet. */
     readonly cells: number;
 }
@@ -556,6 +567,23 @@ export type EditOperation =
           readonly sheet: string;
           /** A1 range such as `A1:D20`, or `null` to clear it. */
           readonly range: string | null;
+      }
+    | {
+          /**
+           * Defines a workbook-scope name bound to `range` on `sheet`, or
+           * redefines the existing name when it matches case-insensitively.
+           */
+          readonly op: 'name.define';
+          /** Defined name; must not look like a cell reference. */
+          readonly name: string;
+          readonly sheet: string;
+          /** A1 range such as `A1:C4`. */
+          readonly range: string;
+      }
+    | {
+          /** Removes a defined name; unknown names fail with `object/not-found`. */
+          readonly op: 'name.remove';
+          readonly name: string;
       }
     | {
           /**

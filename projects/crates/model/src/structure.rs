@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::{
     error::ServiceError,
-    model::{CellRange, Project, Sheet, SheetColumn},
+    model::{CellRange, NamedRange, Project, Sheet, SheetColumn},
     reference,
     shift::{self, Axis, Shift},
 };
@@ -27,7 +27,10 @@ pub(crate) fn insert_rows(project: &mut Project, operation: &Value) -> Result<()
     ensure_band(start, count, MAX_ROW, "row.insert", "row")?;
     check_insert_rows(&project.sheets[index], start, count)?;
     let target = project.sheets[index].name.clone();
+    let id = project.sheets[index].id.clone();
+    check_insert_names(&project.names, &id, start, count, MAX_ROW, |range| range.end_row, "row")?;
     shift_rows(&mut project.sheets[index], start, count);
+    shift_named_rows(&mut project.names, &id, start, count);
     shift::shift_project(project, &target, Axis::Row, Shift::Insert { at: start, count });
     project.normalize();
     Ok(())
@@ -40,7 +43,9 @@ pub(crate) fn delete_rows(project: &mut Project, operation: &Value) -> Result<()
     let count = count_of(operation)?;
     let end = ensure_band(start, count, MAX_ROW, "row.delete", "row")?;
     let target = project.sheets[index].name.clone();
+    let id = project.sheets[index].id.clone();
     delete_rows_from(&mut project.sheets[index], start, end);
+    delete_named_rows(&mut project.names, &id, start, end);
     shift::shift_project(project, &target, Axis::Row, Shift::Delete { start, end });
     project.normalize();
     Ok(())
@@ -54,7 +59,10 @@ pub(crate) fn insert_columns(project: &mut Project, operation: &Value) -> Result
     ensure_band(start, count, MAX_COLUMN, "column.insert", "column")?;
     check_insert_columns(&project.sheets[index], start, count)?;
     let target = project.sheets[index].name.clone();
+    let id = project.sheets[index].id.clone();
+    check_insert_names(&project.names, &id, start, count, MAX_COLUMN, |range| range.end_column, "column")?;
     shift_columns(&mut project.sheets[index], start, count);
+    shift_named_columns(&mut project.names, &id, start, count);
     shift::shift_project(project, &target, Axis::Column, Shift::Insert { at: start, count });
     project.normalize();
     Ok(())
@@ -67,7 +75,9 @@ pub(crate) fn delete_columns(project: &mut Project, operation: &Value) -> Result
     let count = count_of(operation)?;
     let end = ensure_band(start, count, MAX_COLUMN, "column.delete", "column")?;
     let target = project.sheets[index].name.clone();
+    let id = project.sheets[index].id.clone();
     delete_columns_from(&mut project.sheets[index], start, end);
+    delete_named_columns(&mut project.names, &id, start, end);
     shift::shift_project(project, &target, Axis::Column, Shift::Delete { start, end });
     project.normalize();
     Ok(())
@@ -365,4 +375,86 @@ fn delete_span(span: (u32, u32), start: u32, end: u32) -> Option<(u32, u32)> {
     let new_low = if low < start { low } else { start };
     let new_high = if high > end { high - (end - start + 1) } else { start - 1 };
     (new_high >= new_low).then_some((new_low, new_high))
+}
+
+/// Rejects an insert that would push a named range past the grid on the edited axis.
+fn check_insert_names(
+    names: &[NamedRange],
+    sheet: &str,
+    start: u32,
+    count: u32,
+    max: u32,
+    end_of: fn(&CellRange) -> u32,
+    unit: &str,
+) -> Result<(), ServiceError> {
+    let overflows = |value: u32| value >= start && value + count > max;
+    if names.iter().any(|named| named.sheet == sheet && overflows(end_of(&named.range))) {
+        return Err(ServiceError::argument(format!(
+            "inserting {count} {unit}s before {unit} {start} would push a named range past {unit} {max}"
+        )));
+    }
+    Ok(())
+}
+
+/// Moves the named ranges on one sheet down by `count`, expanding crossings.
+fn shift_named_rows(names: &mut Vec<NamedRange>, sheet: &str, start: u32, count: u32) {
+    for named in names.iter_mut().filter(|named| named.sheet == sheet) {
+        let range = &mut named.range;
+        if range.end_row < start {
+            continue;
+        }
+        if range.start_row >= start {
+            range.start_row += count;
+        }
+        range.end_row += count;
+    }
+}
+
+/// Moves the named ranges on one sheet right by `count`, expanding crossings.
+fn shift_named_columns(names: &mut Vec<NamedRange>, sheet: &str, start: u32, count: u32) {
+    for named in names.iter_mut().filter(|named| named.sheet == sheet) {
+        let range = &mut named.range;
+        if range.end_column < start {
+            continue;
+        }
+        if range.start_column >= start {
+            range.start_column += count;
+        }
+        range.end_column += count;
+    }
+}
+
+/// Shrinks or moves named ranges across a deleted row band; a range that
+/// falls entirely inside the band loses its name.
+fn delete_named_rows(names: &mut Vec<NamedRange>, sheet: &str, start: u32, end: u32) {
+    names.retain_mut(|named| {
+        if named.sheet != sheet {
+            return true;
+        }
+        match delete_span((named.range.start_row, named.range.end_row), start, end) {
+            Some((start_row, end_row)) => {
+                named.range.start_row = start_row;
+                named.range.end_row = end_row;
+                true
+            }
+            None => false,
+        }
+    });
+}
+
+/// Shrinks or moves named ranges across a deleted column band.
+fn delete_named_columns(names: &mut Vec<NamedRange>, sheet: &str, start: u32, end: u32) {
+    names.retain_mut(|named| {
+        if named.sheet != sheet {
+            return true;
+        }
+        match delete_span((named.range.start_column, named.range.end_column), start, end) {
+            Some((start_column, end_column)) => {
+                named.range.start_column = start_column;
+                named.range.end_column = end_column;
+                true
+            }
+            None => false,
+        }
+    });
 }

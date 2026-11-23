@@ -562,3 +562,142 @@ fn format_number_rejects_invalid_requests() {
     }
     engine::close(handle).expect("close");
 }
+
+#[test]
+fn named_ranges_round_trip_and_redefine_case_insensitively() {
+    let project_path = temp_path("names", "oexcel");
+    let created = engine::create(&json!({ "title": "Names" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "value": 1 },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A2", "value": 2 },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A3", "value": 3 },
+                { "op": "name.define", "name": "Sales", "sheet": "Sheet1", "range": "A1:A3" },
+                { "op": "name.define", "name": "Tax", "sheet": "Sheet1", "range": "B1:B2" },
+            ]
+        }),
+    )
+    .expect("define");
+    let summary = engine::summary(handle).expect("summary");
+    assert_eq!(
+        summary["names"],
+        json!([
+            { "name": "Sales", "sheet": "Sheet1", "range": "A1:A3" },
+            { "name": "Tax", "sheet": "Sheet1", "range": "B1:B2" },
+        ])
+    );
+
+    engine::edit(handle, &json!({ "operations": [{ "op": "name.define", "name": "sales", "sheet": "Sheet1", "range": "A2:A3" }] }))
+        .expect("redefine");
+    let summary = engine::summary(handle).expect("summary after redefine");
+    assert_eq!(
+        summary["names"],
+        json!([
+            { "name": "sales", "sheet": "Sheet1", "range": "A2:A3" },
+            { "name": "Tax", "sheet": "Sheet1", "range": "B1:B2" },
+        ]),
+        "a case-insensitive redefine replaces the name"
+    );
+
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+    let project = read_project_json(&project_path);
+    assert_eq!(
+        project["names"],
+        json!([
+            { "name": "sales", "sheet": "sheet-1", "range": { "startRow": 2, "endRow": 3, "startColumn": 1, "endColumn": 1 } },
+            { "name": "Tax", "sheet": "sheet-1", "range": { "startRow": 1, "endRow": 2, "startColumn": 2, "endColumn": 2 } },
+        ])
+    );
+
+    let reopened = engine::open(&project_path).expect("reopen");
+    let read_handle = reopened["handle"].as_u64().expect("handle");
+    assert_eq!(
+        engine::summary(read_handle).expect("summary after reopen")["names"],
+        json!([
+            { "name": "sales", "sheet": "Sheet1", "range": "A2:A3" },
+            { "name": "Tax", "sheet": "Sheet1", "range": "B1:B2" },
+        ]),
+        "names survive the reopen"
+    );
+    engine::edit(read_handle, &json!({ "operations": [{ "op": "name.remove", "name": "TAX" }] })).expect("remove");
+    assert_eq!(engine::summary(read_handle).expect("summary")["names"].as_array().expect("names").len(), 1);
+    let error =
+        engine::edit(read_handle, &json!({ "operations": [{ "op": "name.remove", "name": "Tax" }] })).expect_err("remove twice");
+    assert_eq!(error.code, "object/not-found");
+    engine::close(read_handle).expect("close");
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn named_ranges_move_with_structural_edits_and_dying_sheets() {
+    let project_path = temp_path("names-shift", "oexcel");
+    let created = engine::create(&json!({ "title": "NamesShift" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "name.define", "name": "Data", "sheet": "Sheet1", "range": "A1:A3" },
+                { "op": "name.define", "name": "Wide", "sheet": "Sheet1", "range": "A1:C1" },
+                { "op": "name.define", "name": "Top", "sheet": "Sheet1", "range": "A5:A5" },
+                { "op": "sheet.add", "name": "Notes" },
+                { "op": "name.define", "name": "NotesRange", "sheet": "Notes", "range": "B2:B4" },
+            ]
+        }),
+    )
+    .expect("seed");
+    engine::edit(handle, &json!({ "operations": [{ "op": "row.insert", "sheet": "Sheet1", "row": 2 }] })).expect("insert row");
+    engine::edit(handle, &json!({ "operations": [{ "op": "column.insert", "sheet": "Sheet1", "column": "B" }] }))
+        .expect("insert column");
+    engine::edit(handle, &json!({ "operations": [{ "op": "row.delete", "sheet": "Sheet1", "row": 6 }] })).expect("delete Top row");
+    engine::edit(handle, &json!({ "operations": [{ "op": "row.delete", "sheet": "Sheet1", "row": 2, "count": 2 }] }))
+        .expect("shrink Data");
+    engine::edit(handle, &json!({ "operations": [{ "op": "sheet.remove", "sheet": "Notes" }] })).expect("drop the named sheet");
+
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+
+    let project = read_project_json(&project_path);
+    let names = project["names"].as_array().expect("names");
+    assert_eq!(names.len(), 2, "a name fully inside a deleted band and a name on a removed sheet are dropped");
+    let data = names.iter().find(|named| named["name"] == json!("Data")).expect("Data");
+    assert_eq!(
+        data["range"],
+        json!({ "startRow": 1, "endRow": 2, "startColumn": 1, "endColumn": 1 }),
+        "Data crossed the insert and shrank across the delete"
+    );
+    let wide = names.iter().find(|named| named["name"] == json!("Wide")).expect("Wide");
+    assert_eq!(
+        wide["range"],
+        json!({ "startRow": 1, "endRow": 1, "startColumn": 1, "endColumn": 4 }),
+        "Wide expanded across the column insert"
+    );
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn name_operations_reject_invalid_requests() {
+    let created = engine::create(&json!({ "title": "NamesInvalid" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let argument_requests = [
+        json!({ "operations": [{ "op": "name.define", "sheet": "Sheet1", "range": "A1:B2" }] }),
+        json!({ "operations": [{ "op": "name.define", "name": "  ", "sheet": "Sheet1", "range": "A1:B2" }] }),
+        json!({ "operations": [{ "op": "name.define", "name": "A1", "sheet": "Sheet1", "range": "A1:B2" }] }),
+        json!({ "operations": [{ "op": "name.define", "name": "A1:B2", "sheet": "Sheet1", "range": "A1:B2" }] }),
+        json!({ "operations": [{ "op": "name.define", "name": "Data", "sheet": "Sheet1" }] }),
+        json!({ "operations": [{ "op": "name.define", "name": "Data", "sheet": "Sheet1", "range": "nope" }] }),
+        json!({ "operations": [{ "op": "name.remove" }] }),
+    ];
+    for request in argument_requests {
+        let error = engine::edit(handle, &request).expect_err("invalid name request");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    let error = engine::edit(handle, &json!({ "operations": [{ "op": "name.define", "name": "Data", "sheet": "Missing", "range": "A1:B2" }] }))
+        .expect_err("missing sheet");
+    assert_eq!(error.code, "object/not-found");
+    engine::close(handle).expect("close");
+}

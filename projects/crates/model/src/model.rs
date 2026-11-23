@@ -30,6 +30,9 @@ pub struct Project {
     pub styles: Styles,
     /// Sheets in workbook order.
     pub sheets: Vec<Sheet>,
+    /// Workbook-scope defined names bound to sheet rectangles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<NamedRange>,
 }
 
 impl Project {
@@ -41,6 +44,7 @@ impl Project {
             title: title.into(),
             styles: Styles::default(),
             sheets: vec![Sheet::new("sheet-1", "Sheet1", 0)],
+            names: Vec::new(),
         }
     }
 
@@ -102,8 +106,23 @@ impl Project {
         for sheet in &mut self.sheets {
             sheet.normalize();
         }
+        self.names.retain(|named| self.sheets.iter().any(|sheet| sheet.id == named.sheet));
+        self.names.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+        self.names.dedup_by(|left, right| left.name.eq_ignore_ascii_case(&right.name));
         self.reindex();
     }
+}
+
+/// Workbook-scope defined name bound to one sheet rectangle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NamedRange {
+    /// Defined name as the caller typed it.
+    pub name: String,
+    /// Id of the sheet the range lives on.
+    pub sheet: String,
+    /// Rectangle the name resolves to.
+    pub range: CellRange,
 }
 
 /// Style tables kept with the project.
