@@ -917,6 +917,63 @@ fn range_sort_orders_whole_rows_and_rejects_merges() {
 }
 
 #[test]
+fn range_sort_orders_by_several_keys() {
+    let created = open_excel_workbook::create(&json!({ "title": "Sort" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [
+                    ["group", "score", "name"],
+                    ["b", 2, "b2"],
+                    ["a", 9, "a9"],
+                    ["a", 3, "a3"],
+                    ["b", 1, "b1"],
+                ] }
+            ]
+        }),
+    )
+    .expect("seed");
+
+    let sorted = open_excel_workbook::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.sort", "sheet": "Sheet1", "range": "A1:C5", "hasHeader": true, "keys": [
+                    { "column": "A", "ascending": true },
+                    { "column": "B", "ascending": false },
+                ] }
+            ]
+        }),
+    )
+    .expect("sort by group then descending score");
+    assert_eq!(sorted["revision"], json!(2));
+
+    let project = project_of(handle);
+    let sheet = project.sheet("Sheet1").expect("sheet");
+    assert_eq!(sheet.cell(1, 1).expect("A1").value, CellValue::text("group"));
+    let names = (2..=5).map(|row| sheet.cell(row, 3).expect("name cell").value.clone()).collect::<Vec<_>>();
+    assert_eq!(names, ["a9", "a3", "b2", "b1"].map(CellValue::text));
+
+    let before = open_excel_workbook::summary(handle).expect("summary")["revision"].clone();
+    for operation in [
+        json!({ "op": "range.sort", "sheet": "Sheet1", "range": "A1:C5", "column": 1, "keys": [{ "column": 1 }] }),
+        json!({ "op": "range.sort", "sheet": "Sheet1", "range": "A1:C5", "keys": [] }),
+        json!({ "op": "range.sort", "sheet": "Sheet1", "range": "A1:C5", "keys": [{ "column": 4 }] }),
+    ] {
+        let error = open_excel_workbook::edit(handle, &json!({ "operations": [operation] })).expect_err("bad keys");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    assert_eq!(
+        open_excel_workbook::summary(handle).expect("summary")["revision"],
+        before,
+        "failed sorts consume no revision"
+    );
+    open_excel_workbook::close(handle).expect("close");
+}
+
+#[test]
 fn fill_series_writes_linear_numbers_and_rejects_bad_ranges() {
     let created = open_excel_workbook::create(&json!({ "title": "Series" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");

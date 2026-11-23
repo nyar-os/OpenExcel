@@ -892,8 +892,7 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             if !range.is_valid() || range.end_row > 1_048_576 || range.end_column > 16_384 {
                 return Err(ServiceError::argument(format!("sort range `{}` leaves the sheet grid", range.reference())));
             }
-            let column = sort_column(operation, &range)?;
-            let ascending = operation.get("ascending").and_then(Value::as_bool).unwrap_or(true);
+            let keys = sort_keys(operation, &range)?;
             let has_header = operation.get("hasHeader").and_then(Value::as_bool).unwrap_or(false);
             // Formula keys sort by the value a reader sees, not a stale cache.
             eval::recalculate(project);
@@ -908,13 +907,12 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             if first_row <= range.end_row {
                 let mut records = Vec::new();
                 for row in first_row..=range.end_row {
-                    let sort_value = sheet.cell(row, column).map(eval::value_of).unwrap_or(CellValue::Empty);
                     let cells = (range.start_column..=range.end_column)
                         .map(|column| sheet.cell(row, column).cloned())
                         .collect::<Vec<_>>();
-                    records.push((sort_value, cells));
+                    records.push(cells);
                 }
-                records.sort_by(|left, right| compare_sort_values(&left.0, &right.0, ascending));
+                records.sort_by(|left, right| compare_sort_records(left, right, range.start_column, &keys));
                 let body = CellRange {
                     start_row: first_row,
                     end_row: range.end_row,
@@ -922,7 +920,7 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                     end_column: range.end_column,
                 };
                 sheet.clear_range(&body);
-                for (offset, (_, cells)) in records.into_iter().enumerate() {
+                for (offset, cells) in records.into_iter().enumerate() {
                     let row = first_row + offset as u32;
                     for (column_offset, cell) in cells.into_iter().enumerate() {
                         let Some(mut cell) = cell
@@ -1571,6 +1569,61 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
 ///
 /// A number is a one-based offset inside the range; a letter is the absolute
 /// sheet column. Either form must land inside the sorted range.
+/// Reads the sort keys of one `range.sort` call.
+///
+/// `keys` is an ordered list of `{ column, ascending? }` entries compared left
+/// to right. When it is omitted the single `column` and `ascending` fields
+/// describe one key, so older scripts keep their meaning.
+fn sort_keys(operation: &Value, range: &CellRange) -> Result<Vec<(u32, bool)>, ServiceError> {
+    let entries = match operation.get("keys") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(entries)) => Some(entries),
+        Some(_) => return Err(ServiceError::argument("`keys` must be an array of sort keys")),
+    };
+    let Some(entries) = entries else {
+        let column = sort_column(operation, range)?;
+        let ascending = operation.get("ascending").and_then(Value::as_bool).unwrap_or(true);
+        return Ok(vec![(column, ascending)]);
+    };
+    if operation.get("column").is_some() {
+        return Err(ServiceError::argument("`range.sort` takes either `column` or `keys`, not both"));
+    }
+    if entries.is_empty() {
+        return Err(ServiceError::argument("`range.sort` needs at least one entry in `keys`"));
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            let column = sort_column(entry, range)?;
+            let ascending = entry.get("ascending").and_then(Value::as_bool).unwrap_or(true);
+            Ok((column, ascending))
+        })
+        .collect()
+}
+
+/// Compares two rows by each sort key in turn.
+///
+/// Cells are read by their offset inside the sorted rectangle and sorted by the
+/// value a reader sees, so a formula key uses its latest evaluated result.
+fn compare_sort_records(
+    left: &[Option<model::Cell>],
+    right: &[Option<model::Cell>],
+    start_column: u32,
+    keys: &[(u32, bool)],
+) -> std::cmp::Ordering {
+    for (column, ascending) in keys {
+        let offset = column.saturating_sub(start_column) as usize;
+        let value_of = |cells: &[Option<model::Cell>]| {
+            cells.get(offset).and_then(Option::as_ref).map(eval::value_of).unwrap_or(CellValue::Empty)
+        };
+        let ordering = compare_sort_values(&value_of(left), &value_of(right), *ascending);
+        if ordering != std::cmp::Ordering::Equal {
+            return ordering;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
 fn sort_column(operation: &Value, range: &CellRange) -> Result<u32, ServiceError> {
     let column = match operation.get("column") {
         Some(Value::Number(number)) => {

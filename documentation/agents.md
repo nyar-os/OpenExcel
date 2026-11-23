@@ -151,7 +151,7 @@ await reopened.dispose();
 | `range.move` | `sheet`, `range`, `target` | — | Moves into the rectangle anchored at `target` and clears the source. |
 | `range.swap` | `sheet`, `range`, `target` | — | Exchanges the rectangle with the equal-sized rectangle anchored at `target`. |
 | `range.flip` | `sheet`, `range`, `axis` | — | Mirrors the rectangle in place; `horizontal` swaps columns, `vertical` swaps rows. |
-| `range.sort` | `sheet`, `range`, `column` | `ascending`, `hasHeader` | Sorts whole rows; formulas move with their row. |
+| `range.sort` | `sheet`, `range`, and `column` or `keys` | `ascending`, `hasHeader` | Sorts whole rows by one `column` or an ordered `keys` list; formulas move with their row. |
 | `range.removeDuplicates` | `sheet`, `range` | `keys`, `hasHeader` | Keeps the first row per key signature and compacts the survivors upward, clearing the vacated tail. `keys` holds one-based offsets inside the range or column letters and defaults to every column; cells move with their formulas and styles. Appends `{ op, sheet, range, removed }` to `affected`. |
 | `range.removeEmptyRows` | `sheet`, `range` | — | Removes rows with no cell anywhere inside the range, compacts the survivors upward and clears the vacated tail. Authored blank cells, empty strings and formulas keep their rows. Appends `{ op, sheet, range, removed }` to `affected`. |
 | `range.removeEmptyColumns` | `sheet`, `range` | — | Removes columns with no cell anywhere inside the range, compacts the survivors leftward and clears the vacated right edge. Authored blanks and formulas keep their columns. Appends `{ op, sheet, range, removed }` to `affected`. |
@@ -235,7 +235,7 @@ CLI usage failures add `open-excel.cli.*` codes such as `open-excel.cli.file-req
 - `range.flip` snapshots the rectangle before clearing it, keeps values, formula sources, cached results and styles with their cells, and rejects merged ranges inside the rectangle. A single row flipped vertically or a single column flipped horizontally is a no-op that still reports the rectangle.
 - `range.transpose` moves the block, clears the source and rejects a destination that overlaps it or touches a merged range.
 - `range.fillSeries` needs exactly one row or one column; merged ranges in the way are rejected. With `kind: "date"` the series writes Excel date serials and stamps `yyyy-mm-dd` on every written cell.
-- `range.sort` sorts numbers before text, text before booleans, and leaves blanks trailing; it refuses ranges that overlap a merged range.
+- `range.sort` sorts numbers before text, text before booleans, and leaves blanks trailing; it refuses ranges that overlap a merged range. `keys` is an ordered list of `{ column, ascending? }` entries compared left to right, and passing both `column` and `keys` is rejected. When `keys` is omitted the single `column` and `ascending` fields describe one key.
 - Structural edits (`row.*`, `column.*`) move merged ranges, frozen panes, row heights, column widths and formula references. Deleted reference targets become `#REF!`.
 - Defined names (`name.*`) are workbook-scope. They move with row and column inserts and deletes like merged ranges; a name whose whole range is deleted, or whose sheet is removed, is dropped. Names live in the native `.oexcel` project only and are not written to XLSX.
 - Unknown formula functions keep the cached source value and set `computedState: "unsupported"`; they never invent a result.

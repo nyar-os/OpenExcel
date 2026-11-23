@@ -345,6 +345,14 @@ export interface CellStyleInput {
 /** Sheet tab visibility accepted by `sheet.setVisibility`. */
 export type SheetVisibility = 'visible' | 'hidden' | 'veryHidden';
 
+/** One sort key of `range.sort`; keys compare left to right. */
+export interface SortKey {
+    /** One-based offset inside the sort range or an absolute column letter. */
+    readonly column: number | string;
+    /** Ascending when true, which is the default. */
+    readonly ascending?: boolean;
+}
+
 /** Parsed options of the `freeze` command; exactly one mode applies. */
 export interface FreezeCommandOptions {
     readonly sheet?: string;
@@ -693,17 +701,21 @@ export type EditOperation =
     | { readonly op: 'sheet.move'; readonly sheet: string; readonly index: number }
     | {
           /**
-           * Sorts whole rows of `range` by `column`, moving formulas with their
-           * row. `column` is a one-based offset inside the range or an absolute
-           * column letter. Numbers sort before text, text before booleans, and
-           * blanks always trail. The operation is rejected when the range
-           * overlaps a merged range.
+           * Sorts whole rows of `range` by `column`, or by the ordered `keys`
+           * list when one is given, moving formulas with their row. A key column
+           * is a one-based offset inside the range or an absolute column letter.
+           * Numbers sort before text, text before booleans, and blanks always
+           * trail. The operation is rejected when the range overlaps a merged
+           * range, when both `column` and `keys` are given, or when `keys` is
+           * empty.
            */
           readonly op: 'range.sort';
           readonly sheet: string;
           readonly range: string;
-          readonly column: number | string;
-          /** Ascending when true, which is the default. */
+          readonly column?: number | string;
+          /** Ordered sort keys compared left to right. */
+          readonly keys?: readonly SortKey[];
+          /** Ascending when true, which is the default. Applies to a single `column`. */
           readonly ascending?: boolean;
           /** Keeps the first row of `range` in place. */
           readonly hasHeader?: boolean;
