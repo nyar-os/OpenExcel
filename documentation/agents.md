@@ -145,6 +145,7 @@ await reopened.dispose();
 | --- | --- | --- | --- |
 | `workbook.setTitle` | `title` | — | Renames the workbook; the title is trimmed, must not be blank, and shows in summaries and saved projects. |
 | `cell.set` | `sheet`, `reference`, and `value` or `formula` | — | Writes one cell. A formula may start with or omit `=`. |
+| `cell.clear` | `sheet`, `reference` | `keepStyle` | Clears one cell's value, formula and cached result. With `keepStyle` a styled cell stays with its formatting and an empty value; otherwise the cell is removed entirely. |
 | `range.set` | `sheet`, `start`, `rows` | — | Writes a matrix of literals, formulas or `null` to clear. |
 | `range.append` | `sheet`, `rows`, `start?` | — | Writes the matrix below the sheet's last populated row; the first column comes from `start` (default `A1`). |
 | `range.copy` | `sheet`, `range`, `target` | — | Copies into the rectangle anchored at `target` and keeps the source. |

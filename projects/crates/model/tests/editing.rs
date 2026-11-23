@@ -479,6 +479,47 @@ fn structural_edits_rewrite_qualifying_references_on_other_sheets_only() {
 }
 
 #[test]
+fn cell_clear_removes_values_and_can_keep_style() {
+    let project_path = temp_path("cell-clear", "oexcel");
+    let created = engine::create(&json!({ "title": "Clear" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "B2", "value": "Hello" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "C3", "value": 42 },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "D4", "value": "Styled" },
+                { "op": "format.set", "sheet": "Sheet1", "range": "C3", "style": { "bold": true } },
+                { "op": "format.set", "sheet": "Sheet1", "range": "D4", "style": { "bold": true } },
+                { "op": "cell.clear", "sheet": "Sheet1", "reference": "B2" },
+                { "op": "cell.clear", "sheet": "Sheet1", "reference": "C3", "keepStyle": true },
+                { "op": "cell.clear", "sheet": "Sheet1", "reference": "D4" },
+            ]
+        }),
+    )
+    .expect("edit");
+
+    let error = engine::edit(handle, &json!({ "operations": [{ "op": "cell.clear", "sheet": "Sheet1", "reference": "not-a-cell" }] }))
+        .expect_err("bad reference");
+    assert_eq!(error.code, "session/argument-invalid");
+
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    let cells = sheet["cells"].as_array().expect("cells");
+    assert!(!cells.iter().any(|cell| cell["reference"] == json!("B2")), "a cleared value cell is removed");
+    assert!(!cells.iter().any(|cell| cell["reference"] == json!("D4")), "clearing without keepStyle drops the style too");
+    let kept = cell_json(sheet, "C3");
+    assert_eq!(kept["value"]["kind"], json!("empty"), "the value is cleared");
+    assert_eq!(kept["style"]["bold"], json!(true), "keepStyle preserves formatting");
+
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
 fn format_number_lands_kind_codes_on_every_cell_in_the_range() {
     let project_path = temp_path("format-number", "oexcel");
     let created = engine::create(&json!({ "title": "NumberFormats" })).expect("create");

@@ -474,6 +474,17 @@ export type EditOperation =
           readonly formula?: string;
       }
     | {
+          /** Clears one cell's value, formula and cached result. */
+          readonly op: 'cell.clear';
+          readonly sheet: string;
+          readonly reference: CellAddress;
+          /**
+           * Keeps the cell's style when it has one; the default removes the cell
+           * entirely, like `range.clear` does for a larger rectangle.
+           */
+          readonly keepStyle?: boolean;
+      }
+    | {
           readonly op: 'range.set';
           readonly sheet: string;
           /** Top-left cell of the matrix. */

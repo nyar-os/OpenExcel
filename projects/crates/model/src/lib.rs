@@ -693,6 +693,28 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             sheet.write_cell(row, column, value, formula, None);
             0
         }
+        "cell.clear" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let reference = operation.get("reference").and_then(Value::as_str).unwrap_or("");
+            let (row, column) = reference::parse_reference(reference)
+                .ok_or_else(|| ServiceError::argument(format!("`{reference}` is not an A1 cell reference")))?;
+            let keep_style = operation.get("keepStyle").and_then(Value::as_bool).unwrap_or(false);
+            if let Ok(index) = sheet.cells.binary_search_by_key(&(row, column), |cell| (cell.row, cell.column)) {
+                if keep_style && sheet.cells[index].style.is_some() {
+                    let cell = &mut sheet.cells[index];
+                    cell.value = CellValue::Empty;
+                    cell.formula = None;
+                    cell.cached = None;
+                    cell.computed = None;
+                    cell.computed_state = None;
+                }
+                else {
+                    sheet.cells.remove(index);
+                }
+            }
+            0
+        }
         "sheet.add" => {
             let name = required_name(operation)?;
             if project.sheets.iter().any(|sheet| sheet.name.eq_ignore_ascii_case(&name)) {
