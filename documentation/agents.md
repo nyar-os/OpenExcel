@@ -149,7 +149,7 @@ await reopened.dispose();
 | `range.set` | `sheet`, `start`, `rows` | — | Writes a matrix of literals, formulas or `null` to clear. |
 | `range.append` | `sheet`, `rows`, `start?` | — | Writes the matrix below the sheet's last populated row; the first column comes from `start` (default `A1`). |
 | `range.copy` | `sheet`, `range`, `target` | `targetSheet` | Copies into the rectangle anchored at `target` and keeps the source. `targetSheet` writes into another sheet instead. |
-| `range.move` | `sheet`, `range`, `target` | — | Moves into the rectangle anchored at `target` and clears the source. |
+| `range.move` | `sheet`, `range`, `target` | `targetSheet` | Moves into the rectangle anchored at `target` and clears the source. `targetSheet` moves into another sheet and clears the source sheet instead. |
 | `range.swap` | `sheet`, `range`, `target` | — | Exchanges the rectangle with the equal-sized rectangle anchored at `target`. |
 | `range.flip` | `sheet`, `range`, `axis` | — | Mirrors the rectangle in place; `horizontal` swaps columns, `vertical` swaps rows. |
 | `range.sort` | `sheet`, `range`, and `column` or `keys` | `ascending`, `hasHeader` | Sorts whole rows by one `column` or an ordered `keys` list; formulas move with their row. |

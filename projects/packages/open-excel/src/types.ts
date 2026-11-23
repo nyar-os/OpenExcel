@@ -420,7 +420,8 @@ export interface RangeCopyOperation {
  * relative references inside formulas are not rewritten. The source is
  * snapshotted before either rectangle is cleared, so overlapping source and
  * target stay deterministic; merged ranges intersecting either rectangle are
- * rejected.
+ * rejected. `targetSheet` moves the cells into another sheet, which clears the
+ * source sheet.
  */
 export interface RangeMoveOperation {
     readonly op: 'range.move';
@@ -428,6 +429,8 @@ export interface RangeMoveOperation {
     readonly range: string;
     /** Top-left cell of the destination rectangle. */
     readonly target: CellAddress;
+    /** Destination sheet; the source sheet when omitted. */
+    readonly targetSheet?: string;
 }
 
 /**
