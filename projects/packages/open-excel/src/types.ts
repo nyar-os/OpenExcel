@@ -371,6 +371,7 @@ export interface AffectedRange {
         | 'range.sort'
         | 'range.removeDuplicates'
         | 'range.removeEmptyRows'
+        | 'range.removeEmptyColumns'
         | 'range.fillSeries'
         | 'range.transpose'
         | 'range.copy'
@@ -383,7 +384,7 @@ export interface AffectedRange {
     readonly range: string;
     /** Occurrences replaced by a `cell.replaceText` operation. */
     readonly replaced?: number;
-    /** Rows removed by `range.removeDuplicates` or `range.removeEmptyRows`. */
+    /** Rows or columns removed by a compacting range operation. */
     readonly removed?: number;
 }
 
@@ -732,6 +733,16 @@ export type EditOperation =
            * range is rejected.
            */
           readonly op: 'range.removeEmptyRows';
+          readonly sheet: string;
+          readonly range: string;
+      }
+    | {
+          /**
+           * Removes columns that hold no cell anywhere inside `range` and
+           * compacts the survivors leftward, clearing the vacated right edge.
+           * Authored blank cells, empty strings and formulas keep their columns.
+           */
+          readonly op: 'range.removeEmptyColumns';
           readonly sheet: string;
           readonly range: string;
       }

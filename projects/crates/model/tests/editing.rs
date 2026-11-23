@@ -1060,3 +1060,53 @@ fn remove_empty_rows_compacts_only_rows_without_cells() {
     engine::close(handle).expect("close");
     let _ = fs::remove_file(project_path);
 }
+
+#[test]
+fn remove_empty_columns_compacts_only_columns_without_cells() {
+    let project_path = temp_path("remove-empty-columns", "oexcel");
+    let created = engine::create(&json!({ "title": "Compact columns" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["a", 1], ["b", 2]] },
+                { "op": "range.set", "sheet": "Sheet1", "start": "D1", "rows": [[4], [5]] },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "F1", "end": "G1", "merge": true },
+            ]
+        }),
+    )
+    .expect("seed columns");
+
+    let edited = engine::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.removeEmptyColumns", "sheet": "Sheet1", "range": "A1:E2" }] }),
+    )
+    .expect("compact empty columns");
+    assert_eq!(edited["affected"][0]["op"], json!("range.removeEmptyColumns"));
+    assert_eq!(edited["affected"][0]["removed"], json!(2));
+
+    engine::save(handle, &project_path, true).expect("save");
+    let revision = engine::summary(handle).expect("summary").get("revision").cloned().unwrap_or_default();
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    assert_eq!(cell_json(sheet, "A1")["value"]["text"], json!("a"));
+    assert_eq!(cell_json(sheet, "B1")["value"]["number"], json!(1.0));
+    assert_eq!(cell_json(sheet, "C1")["value"]["number"], json!(4.0), "the D column moves left");
+    assert!(
+        sheet["cells"].as_array().unwrap().iter().all(|cell| !matches!(cell["reference"].as_str(), Some("D1" | "E1" | "D2" | "E2"))),
+        "the vacated right edge is cleared: {sheet}"
+    );
+
+    for request in [
+        json!({ "operations": [{ "op": "range.removeEmptyColumns", "sheet": "Sheet1", "range": "bad" }] }),
+        json!({ "operations": [{ "op": "range.removeEmptyColumns", "sheet": "Sheet1", "range": "F1:G1" }] }),
+        json!({ "operations": [{ "op": "range.removeEmptyColumns", "sheet": "Missing", "range": "A1:B2" }] }),
+    ] {
+        let error = engine::edit(handle, &request).expect_err("invalid empty-column request");
+        assert_ne!(error.code, "");
+    }
+    assert_eq!(engine::summary(handle).expect("summary").get("revision").cloned().unwrap_or_default(), revision);
+    engine::close(handle).expect("close");
+    let _ = fs::remove_file(project_path);
+}

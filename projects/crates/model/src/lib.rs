@@ -973,6 +973,23 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             }));
             0
         }
+        "range.removeEmptyColumns" => {
+            let removed = remove_empty_columns(project, operation)?;
+            let range = operation
+                .get("range")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`range.removeEmptyColumns` needs an A1 range such as `A1:D4`"))?;
+            affected.push(json!({
+                "op": "range.removeEmptyColumns",
+                "sheet": project.sheet(operation.get("sheet").and_then(Value::as_str).unwrap_or(""))
+                    .map(|sheet| sheet.name.clone())
+                    .unwrap_or_default(),
+                "range": range.reference(),
+                "removed": removed,
+            }));
+            0
+        }
         "range.fillSeries" => {
             let filled = fill_series(project, operation)?;
             affected.push(range_effect(project, operation, "range.fillSeries", &filled));
@@ -1729,6 +1746,60 @@ fn remove_empty_rows(project: &mut Project, operation: &Value) -> Result<usize, 
             };
             cell.row = row;
             cell.column = range.start_column + column_offset as u32;
+            cell.reference = reference::format_reference(cell.row, cell.column);
+            sheet.set_cell(cell);
+        }
+    }
+    Ok(removed)
+}
+
+/// Removes columns that hold no cell anywhere inside `range`.
+///
+/// The column counterpart of [`remove_empty_rows`]: a column survives when it
+/// has any cell record in the range, and surviving columns move left with their
+/// values, formulas and styles while the vacated right edge is cleared. Merged
+/// ranges in the way are rejected, exactly like `range.sort`.
+fn remove_empty_columns(project: &mut Project, operation: &Value) -> Result<usize, ServiceError> {
+    let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+    let range = operation
+        .get("range")
+        .and_then(Value::as_str)
+        .and_then(reference::parse_range)
+        .ok_or_else(|| ServiceError::argument("`range.removeEmptyColumns` needs an A1 range such as `A1:D4`"))?;
+    if !range.is_valid() || range.end_row > 1_048_576 || range.end_column > 16_384 {
+        return Err(ServiceError::argument(format!("empty-column range `{}` leaves the sheet grid", range.reference())));
+    }
+    eval::recalculate(project);
+    let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+    if let Some(merged) = sheet.merged.iter().find(|merged| merged.overlaps(&range)) {
+        return Err(ServiceError::argument(format!(
+            "`range.removeEmptyColumns` cannot move columns through merged range `{}`",
+            merged.reference()
+        )));
+    }
+    let mut kept: Vec<Vec<Option<model::Cell>>> = Vec::new();
+    let mut removed = 0usize;
+    for column in range.start_column..=range.end_column {
+        let cells = (range.start_row..=range.end_row).map(|row| sheet.cell(row, column).cloned()).collect::<Vec<_>>();
+        if cells.iter().all(Option::is_none) {
+            removed += 1;
+            continue;
+        }
+        kept.push(cells);
+    }
+    if removed == 0 {
+        return Ok(0);
+    }
+    sheet.clear_range(&range);
+    for (offset, cells) in kept.into_iter().enumerate() {
+        let column = range.start_column + offset as u32;
+        for (row_offset, cell) in cells.into_iter().enumerate() {
+            let Some(mut cell) = cell
+            else {
+                continue;
+            };
+            cell.row = range.start_row + row_offset as u32;
+            cell.column = column;
             cell.reference = reference::format_reference(cell.row, cell.column);
             sheet.set_cell(cell);
         }
