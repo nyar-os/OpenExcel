@@ -165,6 +165,7 @@ await reopened.dispose();
 | `sheet.setAutoFilter` | `sheet`, `range` | — | Declares the sheet autofilter (an A1 range such as `A1:D20`); `null` clears it. |
 | `name.define` | `name`, `sheet`, `range` | — | Defines a workbook-scope name bound to the rectangle, or redefines the existing name when it matches case-insensitively. The name must not look like a cell reference. |
 | `name.remove` | `name` | — | Removes a defined name case-insensitively; an unknown name fails with `object/not-found`. |
+| `name.rename` | `name`, `to` | — | Renames a defined name case-insensitively, keeping its sheet and rectangle; an unknown name fails with `object/not-found` and an existing `to` is refused. |
 | `sheet.add` | `name` | `index` | Adds a sheet. |
 | `sheet.rename` | `sheet`, `name` | — | Renames a sheet. |
 | `sheet.remove` | `sheet` | — | Removes a sheet; the last sheet cannot be removed. |
@@ -175,6 +176,7 @@ await reopened.dispose();
 | `row.setHeight` | `sheet`, `row`, `height` | `hidden` | Sets row height in points. |
 | `column.setWidth` | `sheet`, `column`, `width` | `hidden` | Sets column width in Excel character units. |
 | `cell.replaceText` | `sheet`, `find`, `replace` | `range`, `matchCase`, `limit` | Replaces text in string cell values, skipping formulas, and reports the replacement count. `range` defaults to the used rectangle; `limit` caps occurrences in row-major order. Each call appends `{ op: "cell.replaceText", sheet, range, replaced }` to `affected`. |
+| `range.setTextCase` | `sheet`, `range`, `case` | — | Rewrites the case of every text cell in the rectangle; `case` is `upper`, `lower` or `title`. Formula cells and non-text values are skipped, and the call appends `{ op: "range.setTextCase", sheet, range, changed }` to `affected`. |
 
 The batch is atomic: every operation is validated before the first one is applied, and a successful batch advances `revision` once. `sheet` accepts a sheet name or id.
 

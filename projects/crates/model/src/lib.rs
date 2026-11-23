@@ -808,6 +808,35 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             }
             0
         }
+        "name.rename" => {
+            let name = operation
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| ServiceError::argument("`name.rename` needs a non-empty `name`"))?;
+            let renamed = operation
+                .get("to")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| ServiceError::argument("`name.rename` needs a non-empty `to`"))?;
+            if reference::parse_reference(renamed).is_some() || renamed.contains(':') {
+                return Err(ServiceError::argument(format!(
+                    "`{renamed}` looks like a cell reference; a defined name must not"
+                )));
+            }
+            let index = project
+                .names
+                .iter()
+                .position(|named| named.name.eq_ignore_ascii_case(name))
+                .ok_or_else(|| ServiceError::new("object/not-found", format!("defined name `{name}` does not exist")))?;
+            if project.names.iter().enumerate().any(|(other, named)| other != index && named.name.eq_ignore_ascii_case(renamed)) {
+                return Err(ServiceError::argument(format!("defined name `{renamed}` already exists")));
+            }
+            project.names[index].name = renamed.to_owned();
+            0
+        }
         "range.clear" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
@@ -1317,6 +1346,61 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                 "replaced": replacements,
             }));
             replacements
+        }
+        "range.setTextCase" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet_name = project.sheet(key).map(|sheet| sheet.name.clone()).unwrap_or_else(|| key.to_owned());
+            let range = operation
+                .get("range")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`range.setTextCase` needs an A1 range such as `A1:C4`"))?;
+            let requested = operation
+                .get("case")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|mode| !mode.is_empty())
+                .ok_or_else(|| ServiceError::argument("`range.setTextCase` needs `case`: `upper`, `lower` or `title`"))?;
+            let mode = match requested.to_ascii_lowercase().as_str() {
+                "upper" => TextCase::Upper,
+                "lower" => TextCase::Lower,
+                "title" => TextCase::Title,
+                other => {
+                    return Err(ServiceError::argument(format!(
+                        "`{other}` is not a text case; expected `upper`, `lower` or `title`"
+                    )));
+                }
+            };
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let mut changed = 0usize;
+            for row in range.start_row..=range.end_row {
+                for column in range.start_column..=range.end_column {
+                    let Some(mut cell) = sheet.cell(row, column).cloned()
+                    else {
+                        continue;
+                    };
+                    if cell.formula.is_some() {
+                        continue;
+                    }
+                    let CellValue::Text { text } = &cell.value
+                    else {
+                        continue;
+                    };
+                    let next = mode.apply(text);
+                    if next != *text {
+                        cell.value = CellValue::text(next);
+                        sheet.set_cell(cell);
+                        changed += 1;
+                    }
+                }
+            }
+            affected.push(json!({
+                "op": "range.setTextCase",
+                "sheet": sheet_name,
+                "range": range.reference(),
+                "changed": changed,
+            }));
+            0
         }
         "sheet.duplicate" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
@@ -1971,6 +2055,48 @@ fn compare_sort_values(left: &CellValue, right: &CellValue, ascending: bool) -> 
         (CellValue::Empty, CellValue::Empty) => Ordering::Equal,
     };
     if ascending { ordering } else { ordering.reverse() }
+}
+
+/// Text case applied to a cell by `range.setTextCase`.
+#[derive(Clone, Copy)]
+enum TextCase {
+    Upper,
+    Lower,
+    Title,
+}
+
+impl TextCase {
+    fn apply(self, text: &str) -> String {
+        match self {
+            Self::Upper => text.to_uppercase(),
+            Self::Lower => text.to_lowercase(),
+            Self::Title => title_case(text),
+        }
+    }
+}
+
+/// Upper-cases the first letter of every whitespace-separated word and
+/// lower-cases the rest, leaving punctuation and digits in place.
+fn title_case(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut start = true;
+    for character in text.chars() {
+        if character.is_whitespace() {
+            start = true;
+            output.push(character);
+        }
+        else if start && character.is_alphabetic() {
+            output.extend(character.to_uppercase());
+            start = false;
+        }
+        else {
+            output.extend(character.to_lowercase());
+            if character.is_alphanumeric() {
+                start = false;
+            }
+        }
+    }
+    output
 }
 
 /// Replaces up to `limit` non-overlapping occurrences and reports how many it replaced.

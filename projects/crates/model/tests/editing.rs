@@ -633,6 +633,94 @@ fn named_ranges_round_trip_and_redefine_case_insensitively() {
 }
 
 #[test]
+fn text_case_rewrites_text_cells_and_skips_formulas_and_numbers() {
+    let created = engine::create(&json!({ "title": "Case" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let edited = engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["alpha beta"], ["Mixed Text"], [{ "formula": "=A1" }], [12]] },
+                { "op": "range.setTextCase", "sheet": "Sheet1", "range": "A1:A4", "case": "upper" },
+            ]
+        }),
+    )
+    .expect("upper-case");
+    assert_eq!(
+        edited["affected"].as_array().and_then(|entries| entries.last()).cloned(),
+        Some(json!({ "op": "range.setTextCase", "sheet": "Sheet1", "range": "A1:A4", "changed": 2 }))
+    );
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A1" })).expect("A1")["value"], json!("ALPHA BETA"));
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A2" })).expect("A2")["value"], json!("MIXED TEXT"));
+
+    engine::edit(handle, &json!({ "operations": [{ "op": "range.setTextCase", "sheet": "Sheet1", "range": "A1:A2", "case": "title" }] }))
+        .expect("title-case");
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A1" })).expect("A1")["value"], json!("Alpha Beta"));
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A2" })).expect("A2")["value"], json!("Mixed Text"));
+    assert_eq!(
+        engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A3" })).expect("A3")["formula"],
+        json!("=A1"),
+        "a formula cell is skipped"
+    );
+    assert_eq!(
+        engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A4" })).expect("A4")["value"].as_f64(),
+        Some(12.0),
+        "a number is not text"
+    );
+
+    for request in [
+        json!({ "operations": [{ "op": "range.setTextCase", "sheet": "Sheet1", "range": "A1:A2", "case": "sideways" }] }),
+        json!({ "operations": [{ "op": "range.setTextCase", "sheet": "Sheet1", "range": "nope", "case": "upper" }] }),
+        json!({ "operations": [{ "op": "range.setTextCase", "sheet": "Sheet1", "range": "A1:A2" }] }),
+    ] {
+        let error = engine::edit(handle, &request).expect_err("invalid case request");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    engine::close(handle).expect("close");
+}
+
+#[test]
+fn defined_names_can_be_renamed_case_insensitively() {
+    let created = engine::create(&json!({ "title": "Rename" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "name.define", "name": "Sales", "sheet": "Sheet1", "range": "A1:A3" },
+                { "op": "name.define", "name": "Tax", "sheet": "Sheet1", "range": "B1:B2" },
+            ]
+        }),
+    )
+    .expect("define");
+    engine::edit(handle, &json!({ "operations": [{ "op": "name.rename", "name": "sales", "to": "Revenue" }] }))
+        .expect("rename case-insensitively");
+    assert_eq!(
+        engine::summary(handle).expect("summary")["names"],
+        json!([
+            { "name": "Revenue", "sheet": "Sheet1", "range": "A1:A3" },
+            { "name": "Tax", "sheet": "Sheet1", "range": "B1:B2" },
+        ])
+    );
+
+    let taken = engine::edit(handle, &json!({ "operations": [{ "op": "name.rename", "name": "Revenue", "to": "TAX" }] }))
+        .expect_err("the target already exists");
+    assert_eq!(taken.code, "session/argument-invalid");
+    let missing = engine::edit(handle, &json!({ "operations": [{ "op": "name.rename", "name": "Missing", "to": "Other" }] }))
+        .expect_err("unknown source name");
+    assert_eq!(missing.code, "object/not-found");
+    for request in [
+        json!({ "operations": [{ "op": "name.rename", "name": "Revenue", "to": "A1" }] }),
+        json!({ "operations": [{ "op": "name.rename", "name": "Revenue", "to": " " }] }),
+        json!({ "operations": [{ "op": "name.rename", "name": "Revenue" }] }),
+    ] {
+        let error = engine::edit(handle, &request).expect_err("invalid rename request");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    engine::close(handle).expect("close");
+}
+
+#[test]
 fn named_ranges_move_with_structural_edits_and_dying_sheets() {
     let project_path = temp_path("names-shift", "oexcel");
     let created = engine::create(&json!({ "title": "NamesShift" })).expect("create");

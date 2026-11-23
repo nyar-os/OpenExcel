@@ -587,6 +587,18 @@ export type EditOperation =
       }
     | {
           /**
+           * Renames a defined name case-insensitively, keeping the sheet and
+           * rectangle it resolves to. An unknown name is `object/not-found`; a
+           * name that already exists is refused.
+           */
+          readonly op: 'name.rename';
+          /** Existing defined name. */
+          readonly name: string;
+          /** New name; must not look like a cell reference. */
+          readonly to: string;
+      }
+    | {
+          /**
            * Inserts `count` empty rows before `row`, moving cells, merged ranges,
            * frozen panes, row heights, column widths and local formula references.
            */
@@ -640,6 +652,17 @@ export type EditOperation =
           readonly matchCase?: boolean;
           /** Maximum occurrences to replace; unlimited when omitted. */
           readonly limit?: number;
+      }
+    | {
+          /**
+           * Rewrites the case of every text cell in `range`. Formula cells and
+           * non-text values are skipped; styles, references and numbers stay.
+           * `title` upper-cases the first letter of each whitespace-separated word.
+           */
+          readonly op: 'range.setTextCase';
+          readonly sheet: string;
+          readonly range: string;
+          readonly case: 'upper' | 'lower' | 'title';
       }
     | { readonly op: 'sheet.add'; readonly name: string; readonly index?: number }
     | { readonly op: 'sheet.rename'; readonly sheet: string; readonly name: string }
