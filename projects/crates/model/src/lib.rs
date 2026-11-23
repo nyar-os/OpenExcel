@@ -1424,11 +1424,14 @@ fn optional_finite(operation: &Value, key: &str) -> Result<Option<f64>, ServiceE
     }
 }
 
-/// Fills one single-row or single-column range with a linear numeric series.
+/// Fills one single-row or single-column range with a linear series.
 ///
 /// The first cell seeds the start and the first two cells seed the step unless
 /// the request names `start` and `step` explicitly. Existing styles stay on
 /// their cells, while formulas inside the range are replaced by the series.
+/// With `kind: "date"` the series is a sequence of Excel date serials (the step
+/// is a number of days) and every written cell also gains the `yyyy-mm-dd`
+/// number format.
 fn fill_series(project: &mut Project, operation: &Value) -> Result<CellRange, ServiceError> {
     let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
     let range = operation
@@ -1438,6 +1441,16 @@ fn fill_series(project: &mut Project, operation: &Value) -> Result<CellRange, Se
         .ok_or_else(|| ServiceError::argument("`range.fillSeries` needs an A1 range such as `A1:A5`"))?;
     if !range.is_valid() || range.end_row > 1_048_576 {
         return Err(ServiceError::argument(format!("series range `{}` leaves the sheet grid", range.reference())));
+    }
+    let kind = match operation.get("kind") {
+        None | Some(Value::Null) => "linear".to_owned(),
+        Some(Value::String(text)) => text.trim().to_ascii_lowercase(),
+        Some(_) => {
+            return Err(ServiceError::argument("`range.fillSeries` `kind` must be `linear` or `date`"));
+        }
+    };
+    if kind != "linear" && kind != "date" {
+        return Err(ServiceError::argument(format!("`{kind}` is not a series kind; expected `linear` or `date`")));
     }
     let vertical = match (range.rows() > 1, range.columns() > 1) {
         (true, false) => true,
@@ -1483,7 +1496,11 @@ fn fill_series(project: &mut Project, operation: &Value) -> Result<CellRange, Se
         },
     };
     for (offset, (row, column)) in coordinates.iter().enumerate() {
-        let style = sheet.cell(*row, *column).and_then(|cell| cell.style.clone());
+        let mut style = sheet.cell(*row, *column).and_then(|cell| cell.style.clone());
+        if kind == "date" {
+            let date_style = model::CellStyle { number_format: Some("yyyy-mm-dd".to_owned()), ..model::CellStyle::default() };
+            style = Some(merge_style(style.as_ref(), &date_style));
+        }
         let cell = model::Cell {
             reference: reference::format_reference(*row, *column),
             row: *row,

@@ -665,14 +665,18 @@ export type EditOperation =
       }
     | {
           /**
-           * Fills `range`, a single row or a single column, with a linear numeric
-           * series. The first cell seeds the start and, when two numeric cells are
+           * Fills `range`, a single row or a single column, with a linear series.
+           * The first cell seeds the start and, when two numeric cells are
            * present, the second seeds the step. Existing styles stay in place and
-           * formulas inside the range are replaced.
+           * formulas inside the range are replaced. With `kind: 'date'` the series
+           * is a sequence of Excel date serials (the step is a number of days) and
+           * every written cell also gains the `yyyy-mm-dd` number format.
            */
           readonly op: 'range.fillSeries';
           readonly sheet: string;
           readonly range: string;
+          /** Series kind; defaults to `'linear'`. */
+          readonly kind?: 'linear' | 'date';
           /** First value; defaults to the numeric first cell of `range`. */
           readonly start?: number;
           /** Step; defaults to the difference of the first two cells, else `1`. */

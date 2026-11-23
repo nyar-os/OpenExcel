@@ -701,3 +701,54 @@ fn name_operations_reject_invalid_requests() {
     assert_eq!(error.code, "object/not-found");
     engine::close(handle).expect("close");
 }
+
+#[test]
+fn date_series_fill_writes_serials_with_a_date_format() {
+    let project_path = temp_path("date-series", "oexcel");
+    let created = engine::create(&json!({ "title": "DateSeries" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "value": 45000 },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A2", "value": 45031 },
+                { "op": "range.fillSeries", "sheet": "Sheet1", "range": "A1:A5", "kind": "date" },
+                { "op": "range.fillSeries", "sheet": "Sheet1", "range": "B1:B3", "kind": "date", "start": 45000, "step": 7 },
+                { "op": "range.fillSeries", "sheet": "Sheet1", "range": "C1:C3", "start": 1, "step": 2 },
+            ]
+        }),
+    )
+    .expect("edit");
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    assert_eq!(cell_json(sheet, "A1")["value"]["number"], json!(45000.0));
+    assert_eq!(cell_json(sheet, "A2")["value"]["number"], json!(45031.0), "the seeded second cell keeps the inferred step");
+    assert_eq!(cell_json(sheet, "A3")["value"]["number"], json!(45062.0));
+    assert_eq!(cell_json(sheet, "A5")["value"]["number"], json!(45124.0));
+    assert_eq!(cell_json(sheet, "A5")["style"]["numberFormat"], json!("yyyy-mm-dd"));
+    assert_eq!(cell_json(sheet, "B3")["value"]["number"], json!(45014.0), "weekly step");
+    assert_eq!(cell_json(sheet, "B3")["style"]["numberFormat"], json!("yyyy-mm-dd"));
+    assert_eq!(cell_json(sheet, "C1")["value"]["number"], json!(1.0), "the linear default is untouched by the date work");
+    assert!(cell_json(sheet, "C3")["style"]["numberFormat"].is_null(), "a linear fill stamps no date format");
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn date_series_fill_rejects_invalid_kind_requests() {
+    let created = engine::create(&json!({ "title": "DateSeriesInvalid" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let requests = [
+        json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "A1:A3", "kind": "weekday" }] }),
+        json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "A1:A3", "kind": 5 }] }),
+        json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "A1:A3", "kind": "date", "start": "today" }] }),
+    ];
+    for request in requests {
+        let error = engine::edit(handle, &request).expect_err("invalid series kind");
+        assert_eq!(error.code, "session/argument-invalid");
+    }
+    engine::close(handle).expect("close");
+}
