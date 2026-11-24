@@ -537,7 +537,8 @@ fn shift_endpoint(reference: &RefToken, axis: Axis, shift: Shift) -> Option<u32>
 
 /// Line an endpoint inside a deleted band clamps to, given the surviving side.
 fn clamp_to_band(survivor: u32, shift: Shift) -> u32 {
-    let Shift::BandDelete { start, .. } = shift else {
+    let Shift::BandDelete { start, .. } = shift
+    else {
         return survivor;
     };
     if survivor >= start { start } else { start - 1 }
@@ -545,8 +546,12 @@ fn clamp_to_band(survivor: u32, shift: Shift) -> u32 {
 
 /// Orders two moved endpoints the way the original endpoints were ordered.
 fn orient(first: u32, second: u32, moved_first: u32, moved_second: u32) -> (u32, u32) {
-    if first <= second { (moved_first.min(moved_second), moved_first.max(moved_second)) }
-    else { (moved_first.max(moved_second), moved_first.min(moved_second)) }
+    if first <= second {
+        (moved_first.min(moved_second), moved_first.max(moved_second))
+    }
+    else {
+        (moved_first.max(moved_second), moved_first.min(moved_second))
+    }
 }
 
 /// Rewrites a single reference or a range.
@@ -613,7 +618,17 @@ fn rewrite_range(group: &Group, axis: Axis, shift: Shift) -> Transformed {
             (new_low, new_high, new_low != low || new_high != high)
         }
         Shift::Swap { first, second } => {
-            let swap_line = |value: u32| if value == first { second } else if value == second { first } else { value };
+            let swap_line = |value: u32| {
+                if value == first {
+                    second
+                }
+                else if value == second {
+                    first
+                }
+                else {
+                    value
+                }
+            };
             let (new_low, new_high) = (swap_line(low).min(swap_line(high)), swap_line(low).max(swap_line(high)));
             (new_low, new_high, new_low != low || new_high != high)
         }

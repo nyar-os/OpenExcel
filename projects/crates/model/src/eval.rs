@@ -87,7 +87,10 @@ pub(crate) fn expand_aliases(source: &str) -> String {
             while probe < chars.len() && chars[probe].is_whitespace() {
                 probe += 1;
             }
-            if probe < chars.len() && chars[probe] == '(' && let Some((_, target)) = FUNCTION_ALIASES.iter().find(|(alias, _)| alias.eq_ignore_ascii_case(&token)) {
+            if probe < chars.len()
+                && chars[probe] == '('
+                && let Some((_, target)) = FUNCTION_ALIASES.iter().find(|(alias, _)| alias.eq_ignore_ascii_case(&token))
+            {
                 output.push_str(target);
                 continue;
             }

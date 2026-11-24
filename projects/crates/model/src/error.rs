@@ -41,7 +41,8 @@ impl ServiceError {
 
     /// `object/not-found`: the addressed object is absent from the workbook.
     pub fn not_found(kind: &str, id: &str) -> Self {
-        Self::build("object/not-found", format!("`{kind}` `{id}` does not exist")).with_params(json!({ "kind": kind, "id": id }))
+        Self::build("object/not-found", format!("`{kind}` `{id}` does not exist"))
+            .with_params(json!({ "kind": kind, "id": id }))
     }
 
     /// `object/not-found`: the workbook has no sheet to address at all.
@@ -65,11 +66,8 @@ impl ServiceError {
 
     /// `object/unsupported`: the requested template is not available in this build.
     pub fn template_unavailable(template: &str) -> Self {
-        Self::build(
-            "object/unsupported",
-            format!("template `{template}` is not available; this build starts from `blank`"),
-        )
-        .with_params(json!({ "operation": "template", "name": template }))
+        Self::build("object/unsupported", format!("template `{template}` is not available; this build starts from `blank`"))
+            .with_params(json!({ "operation": "template", "name": template }))
     }
 
     /// `object/unsupported`: the edit operation name is not implemented.

@@ -312,7 +312,14 @@ fn line_across(cell: &Cell, axis: Axis) -> (u32, u32) {
 }
 
 /// Rejects a band insert that would push existing content past the grid.
-fn check_band_insert(sheet: &Sheet, at: u32, count: u32, across_start: u32, across_end: u32, axis: Axis) -> Result<(), ServiceError> {
+fn check_band_insert(
+    sheet: &Sheet,
+    at: u32,
+    count: u32,
+    across_start: u32,
+    across_end: u32,
+    axis: Axis,
+) -> Result<(), ServiceError> {
     let (max, unit) = match axis {
         Axis::Row => (MAX_ROW, "row"),
         Axis::Column => (MAX_COLUMN, "column"),
@@ -338,9 +345,7 @@ fn check_band_insert(sheet: &Sheet, at: u32, count: u32, across_start: u32, acro
         )));
     }
     if sheet.cells.iter().any(cell_overflows) || sheet.merged.iter().any(merge_overflows) {
-        return Err(ServiceError::argument(format!(
-            "`range.insert` would push content past {unit} {max}"
-        )));
+        return Err(ServiceError::argument(format!("`range.insert` would push content past {unit} {max}")));
     }
     if sheet.dimension.is_some_and(|rectangle| {
         let (_, high, _, _) = band_span(&rectangle, axis);
@@ -349,9 +354,7 @@ fn check_band_insert(sheet: &Sheet, at: u32, count: u32, across_start: u32, acro
         let (_, high, _, _) = band_span(&rectangle, axis);
         overflows(high)
     }) {
-        return Err(ServiceError::argument(format!(
-            "`range.insert` would push the declared range past {unit} {max}"
-        )));
+        return Err(ServiceError::argument(format!("`range.insert` would push the declared range past {unit} {max}")));
     }
     Ok(())
 }
@@ -378,13 +381,7 @@ fn grow_band_span(sheet: &mut Sheet, axis: Axis, at: u32, count: u32) {
 }
 
 /// Rejects a swap where a merged range crosses one of the two lines.
-fn check_swap_merges(
-    merged: &[CellRange],
-    axis: Axis,
-    first: u32,
-    second: u32,
-    op: &str,
-) -> Result<(), ServiceError> {
+fn check_swap_merges(merged: &[CellRange], axis: Axis, first: u32, second: u32, op: &str) -> Result<(), ServiceError> {
     for range in merged {
         let (low, high) = match axis {
             Axis::Row => (range.start_row, range.end_row),
@@ -742,8 +739,11 @@ fn delete_rows_from(sheet: &mut Sheet, start: u32, end: u32) {
             .map(|(start_row, end_row)| CellRange { start_row, end_row, ..dimension });
     }
     if let Some(filter) = sheet.auto_filter {
-        sheet.auto_filter = delete_span((filter.start_row, filter.end_row), start, end)
-            .map(|(start_row, end_row)| CellRange { start_row, end_row, ..filter });
+        sheet.auto_filter = delete_span((filter.start_row, filter.end_row), start, end).map(|(start_row, end_row)| CellRange {
+            start_row,
+            end_row,
+            ..filter
+        });
     }
 }
 

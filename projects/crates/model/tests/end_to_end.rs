@@ -432,11 +432,8 @@ fn range_append_writes_below_the_last_populated_row() {
     assert_eq!(sheet.cell(4, 4).expect("D4").value, CellValue::text("y"));
     assert_eq!(sheet.cell(3, 1).expect("A3").reference, "A3");
 
-    let error = open_excel_workbook::edit(
-        handle,
-        &json!({ "operations": [{ "op": "range.append", "sheet": "Sheet1" }] }),
-    )
-    .expect_err("rows are required");
+    let error = open_excel_workbook::edit(handle, &json!({ "operations": [{ "op": "range.append", "sheet": "Sheet1" }] }))
+        .expect_err("rows are required");
     assert_eq!(error.code(), "session/argument-invalid");
 
     open_excel_workbook::close(handle).expect("close");
@@ -752,10 +749,7 @@ fn replace_text_scans_the_used_rectangle_and_honours_limit() {
     )
     .expect("limited replace");
     assert_eq!(limited["replacements"], json!(2));
-    assert_eq!(
-        limited["affected"],
-        json!([{ "op": "cell.replaceText", "sheet": "Sheet1", "range": "A1:B2", "replaced": 2 }])
-    );
+    assert_eq!(limited["affected"], json!([{ "op": "cell.replaceText", "sheet": "Sheet1", "range": "A1:B2", "replaced": 2 }]));
     let sheet = project_of(handle).sheet("Sheet1").expect("sheet").clone();
     assert_eq!(sheet.cell(1, 1).expect("A1").value, CellValue::text("X X"));
     assert_eq!(sheet.cell(1, 2).expect("B1").value, CellValue::text("alpha"));
@@ -965,11 +959,7 @@ fn range_sort_orders_by_several_keys() {
         let error = open_excel_workbook::edit(handle, &json!({ "operations": [operation] })).expect_err("bad keys");
         assert_eq!(error.code(), "session/argument-invalid");
     }
-    assert_eq!(
-        open_excel_workbook::summary(handle).expect("summary")["revision"],
-        before,
-        "failed sorts consume no revision"
-    );
+    assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], before, "failed sorts consume no revision");
     open_excel_workbook::close(handle).expect("close");
 }
 
@@ -1237,11 +1227,7 @@ fn range_copy_can_write_into_another_sheet() {
         let error = open_excel_workbook::edit(handle, &json!({ "operations": [operation] })).expect_err("bad target");
         assert!(error.code() == "object/not-found" || error.code() == "session/argument-invalid");
     }
-    assert_eq!(
-        open_excel_workbook::summary(handle).expect("summary")["revision"],
-        before,
-        "failed copies consume no revision"
-    );
+    assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], before, "failed copies consume no revision");
 
     open_excel_workbook::edit(
         handle,
@@ -1310,11 +1296,7 @@ fn range_swap_can_exchange_cells_with_another_sheet() {
         let error = open_excel_workbook::edit(handle, &json!({ "operations": [operation] })).expect_err("bad target");
         assert!(error.code() == "object/not-found" || error.code() == "session/argument-invalid");
     }
-    assert_eq!(
-        open_excel_workbook::summary(handle).expect("summary")["revision"],
-        before,
-        "failed swaps consume no revision"
-    );
+    assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], before, "failed swaps consume no revision");
 
     open_excel_workbook::edit(
         handle,
@@ -1377,11 +1359,7 @@ fn range_move_can_write_into_another_sheet() {
         let error = open_excel_workbook::edit(handle, &json!({ "operations": [operation] })).expect_err("bad target");
         assert!(error.code() == "object/not-found" || error.code() == "session/argument-invalid");
     }
-    assert_eq!(
-        open_excel_workbook::summary(handle).expect("summary")["revision"],
-        before,
-        "failed moves consume no revision"
-    );
+    assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], before, "failed moves consume no revision");
 
     open_excel_workbook::edit(
         handle,

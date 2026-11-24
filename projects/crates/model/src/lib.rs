@@ -795,9 +795,7 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                 .filter(|name| !name.is_empty())
                 .ok_or_else(|| ServiceError::argument("`name.define` needs a non-empty `name`"))?;
             if reference::parse_reference(name).is_some() || name.contains(':') {
-                return Err(ServiceError::argument(format!(
-                    "`{name}` looks like a cell reference; a defined name must not"
-                )));
+                return Err(ServiceError::argument(format!("`{name}` looks like a cell reference; a defined name must not")));
             }
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;
@@ -857,7 +855,8 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                 .iter()
                 .position(|named| named.name.eq_ignore_ascii_case(name))
                 .ok_or_else(|| ServiceError::not_found("defined name", name))?;
-            if project.names.iter().enumerate().any(|(other, named)| other != index && named.name.eq_ignore_ascii_case(renamed)) {
+            if project.names.iter().enumerate().any(|(other, named)| other != index && named.name.eq_ignore_ascii_case(renamed))
+            {
                 return Err(ServiceError::argument(format!("defined name `{renamed}` already exists")));
             }
             project.names[index].name = renamed.to_owned();
@@ -1081,21 +1080,13 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
         "range.append" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
-            let origin = operation
-                .get("start")
-                .and_then(Value::as_str)
-                .and_then(reference::parse_reference)
-                .unwrap_or((1, 1));
+            let origin = operation.get("start").and_then(Value::as_str).and_then(reference::parse_reference).unwrap_or((1, 1));
             let rows = operation
                 .get("rows")
                 .and_then(Value::as_array)
                 .ok_or_else(|| ServiceError::argument("`range.append` needs a `rows` matrix"))?;
-            let last_row = sheet
-                .cells
-                .iter()
-                .filter(|cell| !cell.value.is_empty() || cell.formula.is_some())
-                .map(|cell| cell.row)
-                .max();
+            let last_row =
+                sheet.cells.iter().filter(|cell| !cell.value.is_empty() || cell.formula.is_some()).map(|cell| cell.row).max();
             let start_row = last_row.map_or(origin.0, |row| row + 1).max(origin.0);
             for (row_offset, row) in rows.iter().enumerate() {
                 let cells = row
@@ -1152,9 +1143,7 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                 .and_then(Value::as_str)
                 .and_then(reference::parse_range)
                 .filter(|range| range.start_row == range.end_row && range.start_column == range.end_column)
-                .ok_or_else(|| {
-                    ServiceError::argument("`format.copy` needs a one-cell `source` such as `B2`")
-                })?;
+                .ok_or_else(|| ServiceError::argument("`format.copy` needs a one-cell `source` such as `B2`"))?;
             let target = operation
                 .get("target")
                 .and_then(Value::as_str)
@@ -1367,11 +1356,7 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
         "cell.replaceText" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let sheet_name = project.sheet(key).map(|sheet| sheet.name.clone()).unwrap_or_else(|| key.to_owned());
-            let requested = operation
-                .get("range")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|range| !range.is_empty());
+            let requested = operation.get("range").and_then(Value::as_str).map(str::trim).filter(|range| !range.is_empty());
             let requested = requested
                 .map(|range| {
                     reference::parse_range(range)
@@ -1520,12 +1505,8 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                     else {
                         continue;
                     };
-                    let next = if collapse {
-                        text.split_whitespace().collect::<Vec<_>>().join(" ")
-                    }
-                    else {
-                        text.trim().to_string()
-                    };
+                    let next =
+                        if collapse { text.split_whitespace().collect::<Vec<_>>().join(" ") } else { text.trim().to_string() };
                     if next != *text {
                         cell.value = CellValue::text(next);
                         sheet.set_cell(cell);
@@ -1686,7 +1667,8 @@ fn sort_keys(operation: &Value, range: &CellRange) -> Result<Vec<(u32, bool)>, S
         Some(Value::Array(entries)) => Some(entries),
         Some(_) => return Err(ServiceError::argument("`keys` must be an array of sort keys")),
     };
-    let Some(entries) = entries else {
+    let Some(entries) = entries
+    else {
         let column = sort_column(operation, range)?;
         let ascending = operation.get("ascending").and_then(Value::as_bool).unwrap_or(true);
         return Ok(vec![(column, ascending)]);
@@ -1971,12 +1953,12 @@ fn remove_empty_columns(project: &mut Project, operation: &Value) -> Result<usiz
 /// A number is a one-based offset inside the range, matching `range.sort`, and
 /// a string is an absolute column letter. Omitted keys mean every column.
 fn duplicate_key_columns(operation: &Value, range: &CellRange) -> Result<Vec<u32>, ServiceError> {
-    let Some(requested) = operation.get("keys").filter(|value| !value.is_null()) else {
+    let Some(requested) = operation.get("keys").filter(|value| !value.is_null())
+    else {
         return Ok((range.start_column..=range.end_column).collect());
     };
-    let requested = requested
-        .as_array()
-        .ok_or_else(|| ServiceError::argument("`keys` must be an array of column offsets or letters"))?;
+    let requested =
+        requested.as_array().ok_or_else(|| ServiceError::argument("`keys` must be an array of column offsets or letters"))?;
     if requested.is_empty() {
         return Err(ServiceError::argument("`keys` must list at least one column"));
     }
@@ -2031,9 +2013,7 @@ fn fill_series(project: &mut Project, operation: &Value) -> Result<CellRange, Se
         }
     };
     if kind != "linear" && kind != "date" && kind != "growth" {
-        return Err(ServiceError::argument(format!(
-            "`{kind}` is not a series kind; expected `linear`, `date` or `growth`"
-        )));
+        return Err(ServiceError::argument(format!("`{kind}` is not a series kind; expected `linear`, `date` or `growth`")));
     }
     let vertical = match (range.rows() > 1, range.columns() > 1) {
         (true, false) => true,
@@ -2085,9 +2065,7 @@ fn fill_series(project: &mut Project, operation: &Value) -> Result<CellRange, Se
                 Some(CellValue::Number { number }) if start != 0.0 => number / start,
                 _ if start != 0.0 => 2.0,
                 _ => {
-                    return Err(ServiceError::argument(
-                        "a growth series starting at zero needs an explicit `ratio`",
-                    ));
+                    return Err(ServiceError::argument("a growth series starting at zero needs an explicit `ratio`"));
                 }
             },
         };
@@ -2227,12 +2205,8 @@ fn copy_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
         .filter(|column| *column <= 16_384)
         .ok_or_else(|| ServiceError::argument("the copied range leaves the sheet grid"))?;
     let destination = CellRange { start_row: target_row, end_row, start_column: target_column, end_column };
-    let target_key = operation
-        .get("targetSheet")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|sheet| !sheet.is_empty())
-        .unwrap_or(key);
+    let target_key =
+        operation.get("targetSheet").and_then(Value::as_str).map(str::trim).filter(|sheet| !sheet.is_empty()).unwrap_or(key);
     let source_index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;
     let target_index = project.sheet_index(target_key).ok_or_else(|| missing_sheet(target_key))?;
     let same_sheet = source_index == target_index;
@@ -2246,11 +2220,9 @@ fn copy_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
     if let Some(merged) = blocked {
         return Err(ServiceError::argument(format!("`range.copy` cannot copy merged range `{}`", merged.reference())));
     }
-    if !same_sheet && let Some(merged) = project.sheets[target_index].merged.iter().find(|merged| merged.overlaps(&destination)) {
-        return Err(ServiceError::argument(format!(
-            "`range.copy` cannot write over merged range `{}`",
-            merged.reference()
-        )));
+    if !same_sheet && let Some(merged) = project.sheets[target_index].merged.iter().find(|merged| merged.overlaps(&destination))
+    {
+        return Err(ServiceError::argument(format!("`range.copy` cannot write over merged range `{}`", merged.reference())));
     }
     let matrix = (range.start_row..=range.end_row)
         .map(|row| (range.start_column..=range.end_column).map(|column| source.cell(row, column).cloned()).collect::<Vec<_>>())
@@ -2309,12 +2281,8 @@ fn move_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
         .filter(|column| *column <= 16_384)
         .ok_or_else(|| ServiceError::argument("the moved range leaves the sheet grid"))?;
     let destination = CellRange { start_row: target_row, end_row, start_column: target_column, end_column };
-    let target_key = operation
-        .get("targetSheet")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|sheet| !sheet.is_empty())
-        .unwrap_or(key);
+    let target_key =
+        operation.get("targetSheet").and_then(Value::as_str).map(str::trim).filter(|sheet| !sheet.is_empty()).unwrap_or(key);
     let source_index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;
     let target_index = project.sheet_index(target_key).ok_or_else(|| missing_sheet(target_key))?;
     let same_sheet = source_index == target_index;
@@ -2328,11 +2296,9 @@ fn move_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
     if let Some(merged) = blocked {
         return Err(ServiceError::argument(format!("`range.move` cannot move merged range `{}`", merged.reference())));
     }
-    if !same_sheet && let Some(merged) = project.sheets[target_index].merged.iter().find(|merged| merged.overlaps(&destination)) {
-        return Err(ServiceError::argument(format!(
-            "`range.move` cannot write over merged range `{}`",
-            merged.reference()
-        )));
+    if !same_sheet && let Some(merged) = project.sheets[target_index].merged.iter().find(|merged| merged.overlaps(&destination))
+    {
+        return Err(ServiceError::argument(format!("`range.move` cannot write over merged range `{}`", merged.reference())));
     }
     if same_sheet && destination == range {
         return Ok(destination);
@@ -2394,12 +2360,8 @@ fn swap_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
         .filter(|column| *column <= 16_384)
         .ok_or_else(|| ServiceError::argument("the swapped range leaves the sheet grid"))?;
     let destination = CellRange { start_row: target_row, end_row, start_column: target_column, end_column };
-    let target_key = operation
-        .get("targetSheet")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|sheet| !sheet.is_empty())
-        .unwrap_or(key);
+    let target_key =
+        operation.get("targetSheet").and_then(Value::as_str).map(str::trim).filter(|sheet| !sheet.is_empty()).unwrap_or(key);
     let source_index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;
     let target_index = project.sheet_index(target_key).ok_or_else(|| missing_sheet(target_key))?;
     let same_sheet = source_index == target_index;
@@ -2416,10 +2378,7 @@ fn swap_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
     if !same_sheet {
         let target = &project.sheets[target_index];
         if let Some(merged) = target.merged.iter().find(|merged| merged.overlaps(&destination)) {
-            return Err(ServiceError::argument(format!(
-                "`range.swap` cannot swap merged range `{}`",
-                merged.reference()
-            )));
+            return Err(ServiceError::argument(format!("`range.swap` cannot swap merged range `{}`", merged.reference())));
         }
     }
     if same_sheet && destination == range {
@@ -2576,8 +2535,7 @@ fn fill_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
             return Ok(range);
         }
         let source_row = if from_start { range.start_row } else { range.end_row };
-        let target_rows =
-            if from_start { range.start_row + 1..=range.end_row } else { range.start_row..=range.end_row - 1 };
+        let target_rows = if from_start { range.start_row + 1..=range.end_row } else { range.start_row..=range.end_row - 1 };
         for row in target_rows {
             for column in range.start_column..=range.end_column {
                 fill_cell(sheet, source_row, column, row, column);
@@ -2867,12 +2825,10 @@ fn style_from_json(value: &Value) -> Result<model::CellStyle, ServiceError> {
 /// `percent` builds `0.<places>%`, `date` is the `yyyy-mm-dd` code and `plain`
 /// is `General` or a fixed-decimal `0.<places>` code. `decimals` caps at 12.
 fn number_format_code(operation: &Value) -> Result<String, ServiceError> {
-    let kind = operation
-        .get("kind")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|kind| !kind.is_empty())
-        .ok_or_else(|| ServiceError::argument("`format.number` needs `kind` set to `currency`, `percent`, `date` or `plain`"))?;
+    let kind =
+        operation.get("kind").and_then(Value::as_str).map(str::trim).filter(|kind| !kind.is_empty()).ok_or_else(|| {
+            ServiceError::argument("`format.number` needs `kind` set to `currency`, `percent`, `date` or `plain`")
+        })?;
     let decimals = match operation.get("decimals") {
         None | Some(Value::Null) => None,
         Some(value) => Some(
@@ -3038,7 +2994,8 @@ fn write_file(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), ServiceE
         overwrite: if overwrite { OverwritePolicy::Replace } else { OverwritePolicy::RefuseExisting },
         ..PublishOptions::default()
     };
-    publish_bytes_with_options(publish_target(path), bytes, options).map_err(|error| ServiceError::io_write(path, error.to_string()))
+    publish_bytes_with_options(publish_target(path), bytes, options)
+        .map_err(|error| ServiceError::io_write(path, error.to_string()))
 }
 
 /// Keeps a bare file name anchored to the working directory so the publisher
