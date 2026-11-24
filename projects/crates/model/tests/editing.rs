@@ -1717,3 +1717,202 @@ fn unknown_and_broken_alias_formulas_stay_unsupported() {
     assert_eq!(read("A2")["value"], json!("#NAME?"));
     engine::close(handle).expect("close");
 }
+
+#[test]
+fn line_swaps_carry_named_ranges_merges_and_cross_sheet_dependencies() {
+    let project_path = temp_path("swap-names", "oexcel");
+    let created = engine::create(&json!({ "title": "SwapNames" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let seeded = engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["Head", 10]] },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A3", "value": 5 },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "A1", "end": "B1", "merge": true },
+                { "op": "name.define", "name": "Header", "sheet": "Sheet1", "range": "A1:B1" },
+                { "op": "name.define", "name": "Marker", "sheet": "Sheet1", "range": "A3:A3" },
+                { "op": "name.define", "name": "Span", "sheet": "Sheet1", "range": "A1:A3" },
+                { "op": "range.set", "sheet": "Sheet1", "start": "D1", "rows": [["side"]] },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "D2", "value": 7 },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "D4", "end": "D5", "merge": true },
+                { "op": "name.define", "name": "Side", "sheet": "Sheet1", "range": "D4:D5" },
+                { "op": "sheet.add", "name": "Notes" },
+                { "op": "cell.set", "sheet": "Notes", "reference": "A1", "formula": "=Sheet1!A3" },
+                { "op": "cell.set", "sheet": "Notes", "reference": "A2", "formula": "=Sheet1!D2" },
+            ]
+        }),
+    )
+    .expect("seed");
+    assert_eq!(seeded["revision"], json!(1));
+
+    engine::edit(handle, &json!({ "operations": [{ "op": "row.swap", "sheet": "Sheet1", "row": 1, "other": 3 }] }))
+        .expect("swap rows");
+    engine::edit(handle, &json!({ "operations": [{ "op": "column.swap", "sheet": "Sheet1", "column": "D", "other": "F" }] }))
+        .expect("swap columns");
+
+    // Cross-sheet dependencies follow the swapped lines.
+    let row_dependent = engine::cell(handle, &json!({ "sheet": "Notes", "address": "A1" })).expect("row dependent");
+    assert_eq!(row_dependent["formula"], json!("=Sheet1!A1"), "a qualified reference follows the swapped row");
+    let column_dependent = engine::cell(handle, &json!({ "sheet": "Notes", "address": "A2" })).expect("column dependent");
+    assert_eq!(column_dependent["formula"], json!("=Sheet1!F2"), "a qualified reference follows the swapped column");
+
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+    let project = read_project_json(&project_path);
+    let names = project["names"].as_array().expect("names");
+    let header = names.iter().find(|named| named["name"] == json!("Header")).expect("Header");
+    assert_eq!(
+        header["range"],
+        json!({ "startRow": 3, "endRow": 3, "startColumn": 1, "endColumn": 2 }),
+        "a single-row name moves with its row"
+    );
+    let marker = names.iter().find(|named| named["name"] == json!("Marker")).expect("Marker");
+    assert_eq!(
+        marker["range"],
+        json!({ "startRow": 1, "endRow": 1, "startColumn": 1, "endColumn": 1 }),
+        "the name on the other row moves the opposite way"
+    );
+    let span = names.iter().find(|named| named["name"] == json!("Span")).expect("Span");
+    assert_eq!(
+        span["range"],
+        json!({ "startRow": 1, "endRow": 3, "startColumn": 1, "endColumn": 1 }),
+        "a name straddling both lines keeps its rectangle"
+    );
+    let side = names.iter().find(|named| named["name"] == json!("Side")).expect("Side");
+    assert_eq!(
+        side["range"],
+        json!({ "startRow": 4, "endRow": 5, "startColumn": 6, "endColumn": 6 }),
+        "a single-column name moves with its column"
+    );
+    let sheet = &project["sheets"][0];
+    let merged = sheet["merged"].as_array().expect("merged");
+    assert!(
+        merged.iter().any(|range| range["startRow"] == json!(3)
+            && range["endRow"] == json!(3)
+            && range["startColumn"] == json!(1)
+            && range["endColumn"] == json!(2)),
+        "the swapped row merge follows its row: {merged:?}"
+    );
+    assert!(
+        merged.iter().any(|range| range["startColumn"] == json!(6)
+            && range["endColumn"] == json!(6)
+            && range["startRow"] == json!(4)
+            && range["endRow"] == json!(5)),
+        "the swapped column merge follows its column: {merged:?}"
+    );
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn a_failing_structural_batch_leaves_names_and_revision_untouched() {
+    let project_path = temp_path("swap-fail", "oexcel");
+    let created = engine::create(&json!({ "title": "SwapFail" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "value": 1 },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A3", "value": 3 },
+                { "op": "name.define", "name": "Marker", "sheet": "Sheet1", "range": "A1:A1" },
+            ]
+        }),
+    )
+    .expect("seed");
+
+    // The first operation would succeed; the second fails on an unknown sheet.
+    let error = engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "row.swap", "sheet": "Sheet1", "row": 1, "other": 3 },
+                { "op": "row.swap", "sheet": "Missing", "row": 1, "other": 2 },
+            ]
+        }),
+    )
+    .expect_err("the second swap fails");
+    assert_eq!(error.code(), "object/not-found");
+    assert_eq!(engine::summary(handle).expect("summary")["revision"], json!(1), "a failed batch consumes no revision");
+    let marker_row = engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A1" })).expect("A1");
+    assert_eq!(marker_row["value"], json!(1), "the checked-out first swap is not applied");
+
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+    let project = read_project_json(&project_path);
+    let names = project["names"].as_array().expect("names");
+    let marker = names.iter().find(|named| named["name"] == json!("Marker")).expect("Marker");
+    assert_eq!(marker["range"], json!({ "startRow": 1, "endRow": 1, "startColumn": 1, "endColumn": 1 }));
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn cross_sheet_range_edits_keep_formula_sources_and_reject_merged_bands() {
+    let created = engine::create(&json!({ "title": "CrossRange" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "sheet.add", "name": "Notes" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "value": 4 },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "B1", "formula": "=A1*2" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A2", "value": 9 },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "E1", "formula": "=A1*3" },
+                { "op": "cell.set", "sheet": "Notes", "reference": "E1", "formula": "=Sheet1!A2" },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "G1", "end": "G2", "merge": true },
+            ]
+        }),
+    )
+    .expect("seed");
+
+    let edited = engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.copy", "sheet": "Sheet1", "range": "A1:B1", "target": "C5", "targetSheet": "Notes" },
+                { "op": "range.move", "sheet": "Sheet1", "range": "A2:A2", "target": "C7", "targetSheet": "Notes" },
+                { "op": "range.swap", "sheet": "Notes", "range": "C5:C5", "target": "E1", "targetSheet": "Sheet1" },
+            ]
+        }),
+    )
+    .expect("cross-sheet batch");
+    assert_eq!(edited["revision"], json!(2), "one batch advances the revision once");
+
+    let copied = engine::cell(handle, &json!({ "sheet": "Notes", "address": "D5" })).expect("copied formula");
+    assert_eq!(copied["formula"], json!("=A1*2"), "formula sources travel verbatim across sheets");
+    let source = engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "B1" })).expect("source formula");
+    assert_eq!(source["formula"], json!("=A1*2"), "a copy leaves the source sheet intact");
+    assert_eq!(source["value"], json!(8), "the dependency still evaluates on the source sheet");
+    let moved = engine::cell(handle, &json!({ "sheet": "Notes", "address": "C7" })).expect("moved value");
+    assert_eq!(moved["value"], json!(9));
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "A2" })).expect("cleared")["value"], json!(null));
+    // The move took Sheet1!A2 away but the dependent text stays verbatim.
+    let dependent = engine::cell(handle, &json!({ "sheet": "Notes", "address": "E1" })).expect("dependent");
+    assert_eq!(dependent["formula"], json!("=Sheet1!A2"), "a range move does not rewrite dependents");
+    // The cross-sheet swap carried Sheet1!E1's formula into Notes!C5 and the copied 4 back.
+    let swapped = engine::cell(handle, &json!({ "sheet": "Notes", "address": "C5" })).expect("swapped formula");
+    assert_eq!(swapped["formula"], json!("=A1*3"), "a swapped formula travels verbatim across sheets");
+    assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "E1" })).expect("swapped value")["value"], json!(4));
+
+    // A source rectangle holding a merge is rejected, and the failed batch
+    // leaves the revision untouched.
+    let error = engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.set", "sheet": "Notes", "reference": "H8", "value": 1 },
+                { "op": "range.move", "sheet": "Sheet1", "range": "G1:G2", "target": "J1", "targetSheet": "Notes" },
+            ]
+        }),
+    )
+    .expect_err("moving a merged band across sheets fails");
+    assert_eq!(error.code(), "session/argument-invalid");
+    assert_eq!(engine::summary(handle).expect("summary")["revision"], json!(2), "the failed batch consumes no revision");
+    assert_eq!(
+        engine::cell(handle, &json!({ "sheet": "Notes", "address": "H8" })).expect("partial check")["value"],
+        json!(null),
+        "the earlier operation of the failed batch is not applied"
+    );
+    engine::close(handle).expect("close");
+}

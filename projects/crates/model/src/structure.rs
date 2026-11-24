@@ -87,10 +87,10 @@ pub(crate) fn delete_columns(project: &mut Project, operation: &Value) -> Result
 
 /// Exchanges two whole rows.
 ///
-/// Cells, row heights and merges that sit entirely on one of the two rows move
-/// with their row, and local formula references to either row follow it. A
-/// merge that straddles one of the rows is rejected because the exchange would
-/// tear its shape apart.
+/// Cells, row heights, merges and single-row named ranges that sit entirely on
+/// one of the two rows move with their row, and local formula references to
+/// either row follow it. A merge that straddles one of the rows is rejected
+/// because the exchange would tear its shape apart.
 pub(crate) fn swap_rows(project: &mut Project, operation: &Value) -> Result<(), ServiceError> {
     let index = sheet_index(project, operation)?;
     let first = required_position(operation, "row", "row.swap", MAX_ROW)?;
@@ -99,11 +99,13 @@ pub(crate) fn swap_rows(project: &mut Project, operation: &Value) -> Result<(), 
         return Ok(());
     }
     let (first, second) = (first.min(second), first.max(second));
+    let id = project.sheets[index].id.clone();
     let sheet = &mut project.sheets[index];
     check_swap_merges(&sheet.merged, Axis::Row, first, second, "row.swap")?;
     swap_cells(sheet, Axis::Row, first, second);
     swap_row_records(sheet, first, second);
     swap_line_merges(sheet, Axis::Row, first, second);
+    swap_line_names(&mut project.names, &id, Axis::Row, first, second);
     let target = project.sheets[index].name.clone();
     shift::shift_project(project, &target, Axis::Row, Shift::Swap { first, second });
     project.normalize();
@@ -112,9 +114,10 @@ pub(crate) fn swap_rows(project: &mut Project, operation: &Value) -> Result<(), 
 
 /// Exchanges two whole columns.
 ///
-/// Cells, column widths and merges that sit entirely on one of the two columns
-/// move with their column, and local formula references to either column follow
-/// it. A merge that straddles one of the columns is rejected.
+/// Cells, column widths, merges and single-column named ranges that sit entirely
+/// on one of the two columns move with their column, and local formula references
+/// to either column follow it. A merge that straddles one of the columns is
+/// rejected.
 pub(crate) fn swap_columns(project: &mut Project, operation: &Value) -> Result<(), ServiceError> {
     let index = sheet_index(project, operation)?;
     let first = required_column(operation, "column", "column.swap")?;
@@ -123,11 +126,13 @@ pub(crate) fn swap_columns(project: &mut Project, operation: &Value) -> Result<(
         return Ok(());
     }
     let (first, second) = (first.min(second), first.max(second));
+    let id = project.sheets[index].id.clone();
     let sheet = &mut project.sheets[index];
     check_swap_merges(&sheet.merged, Axis::Column, first, second, "column.swap")?;
     swap_cells(sheet, Axis::Column, first, second);
     swap_column_records(sheet, first, second);
     swap_line_merges(sheet, Axis::Column, first, second);
+    swap_line_names(&mut project.names, &id, Axis::Column, first, second);
     let target = project.sheets[index].name.clone();
     shift::shift_project(project, &target, Axis::Column, Shift::Swap { first, second });
     project.normalize();
@@ -506,6 +511,39 @@ fn swap_column_records(sheet: &mut Sheet, first: u32, second: u32) {
 /// Moves merges that sit entirely on one swapped line to the other line.
 fn swap_line_merges(sheet: &mut Sheet, axis: Axis, first: u32, second: u32) {
     for range in &mut sheet.merged {
+        match axis {
+            Axis::Row if range.start_row == range.end_row => {
+                if range.start_row == first {
+                    range.start_row = second;
+                    range.end_row = second;
+                }
+                else if range.start_row == second {
+                    range.start_row = first;
+                    range.end_row = first;
+                }
+            }
+            Axis::Column if range.start_column == range.end_column => {
+                if range.start_column == first {
+                    range.start_column = second;
+                    range.end_column = second;
+                }
+                else if range.start_column == second {
+                    range.start_column = first;
+                    range.end_column = first;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Moves named ranges that sit entirely on one swapped line to the other line.
+///
+/// A rectangle spanning both lines keeps its coordinates because the exchange
+/// only permutes its own endpoints.
+fn swap_line_names(names: &mut [NamedRange], sheet: &str, axis: Axis, first: u32, second: u32) {
+    for named in names.iter_mut().filter(|named| named.sheet == sheet) {
+        let range = &mut named.range;
         match axis {
             Axis::Row if range.start_row == range.end_row => {
                 if range.start_row == first {
