@@ -142,6 +142,14 @@ console.log(recalc.changed, inspection.passed, xlsx.target);
 
 `export` honours `overwrite` like `save` does; without it an existing target is `io/target-exists`. `inspect` reports findings with stable codes and `passed`; treat `error` severity as a failed delivery.
 
+The workflow above exists verbatim as
+[`projects/packages/open-excel/examples/ledger-workflow.ts`](../projects/packages/open-excel/examples/ledger-workflow.ts):
+it asserts the batch advances the revision once, that the committed `recalc` is
+idempotent, that `D2=260` and `D3=200`, and that both the native project and the
+exported XLSX keep the formula source and the cached result when reopened. CI
+runs it against the real engine via `pnpm --filter @wae/open-excel run example`
+after `build:test`.
+
 ## Edit operation shape
 
 `Workbook.edit()` and `edit --ops` take:
