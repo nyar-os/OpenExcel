@@ -103,15 +103,22 @@ export class OpenExcel {
         return opened.workbook;
     }
 
-    /** Inspects an input without keeping a workbook handle. */
-    async inspect(input: WorkbookInput, options?: InspectOptions): Promise<InspectReport> {
+    /**
+     * Inspects a tracked workbook, or a `{ path }` input without keeping a
+     * handle. Every other session method takes a tracked workbook; `inspect`
+     * additionally accepts a file so a caller can check a package it never opens.
+     */
+    async inspect(input: Workbook | string | WorkbookInput, options?: InspectOptions): Promise<InspectReport> {
         this.assertActive();
-        const opened = service.open(assertProjectPath(input));
-        try {
-            return service.inspect(opened.handle, options?.checks);
-        } finally {
-            service.close(opened.handle);
+        if (typeof input === 'object' && input !== null && ('path' in input || 'bytes' in input)) {
+            const opened = service.open(assertProjectPath(input));
+            try {
+                return service.inspect(opened.handle, options?.checks);
+            } finally {
+                service.close(opened.handle);
+            }
         }
+        return service.inspect(this.handleOf(input), options?.checks);
     }
 
     /** Writes one tracked workbook to a native project path. */

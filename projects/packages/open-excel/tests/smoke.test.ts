@@ -194,3 +194,65 @@ test('a native addon can insert a row and move its references', { skip: installe
     assert.equal(formula.formula, '=A3');
     await excel.dispose();
 });
+
+test('cross-sheet moves, swaps, names and merges carry formula sources and fail atomically', { skip: installed ? false : 'a built addon is not installed' }, async () => {
+    const excel = new OpenExcel();
+    const created = await excel.create({ title: 'Bindings' });
+    const seeded = await excel.edit(created, {
+        operations: [
+            { op: 'sheet.add', name: 'Data' },
+            { op: 'range.set', sheet: 'Sheet1', start: 'A1', rows: [['name', 'total'], ['alpha', { formula: '=1+2' }]] },
+        ],
+    });
+
+    // A cross-sheet move carries the formula source and its computed result.
+    const moved = await excel.edit(seeded.workbook, {
+        operations: [{ op: 'range.move', sheet: 'Sheet1', range: 'A1:B2', target: 'D4', targetSheet: 'Data' }],
+    });
+    assert.equal(moved.revision, 2);
+    const movedTotal = await excel.cell(moved.workbook, { sheet: 'Data', address: 'E5' });
+    assert.equal(movedTotal.formula, '=1+2');
+    assert.equal(movedTotal.value, 3);
+    const cleared = await excel.cell(moved.workbook, { sheet: 'Sheet1', address: 'B2' });
+    assert.equal(cleared.value, null);
+    assert.equal(cleared.formula, null);
+
+    // A workbook name records the moved block on its new sheet.
+    const named = await excel.edit(moved.workbook, {
+        operations: [{ op: 'name.define', name: 'Totals', sheet: 'Data', range: 'D4:E5' }],
+    });
+    assert.deepEqual(named.workbook.names, [{ name: 'Totals', sheet: 'Data', range: 'D4:E5' }]);
+
+    // A cross-sheet swap exchanges both rectangles verbatim.
+    const swapped = await excel.edit(named.workbook, {
+        operations: [
+            { op: 'range.set', sheet: 'Sheet1', start: 'A1', rows: [['x', 10], ['y', 20]] },
+            { op: 'range.swap', sheet: 'Data', range: 'D4:E5', target: 'A1', targetSheet: 'Sheet1' },
+        ],
+    });
+    const swappedTotal = await excel.cell(swapped.workbook, { sheet: 'Sheet1', address: 'B2' });
+    assert.equal(swappedTotal.formula, '=1+2');
+    assert.equal(swappedTotal.value, 3);
+    const swappedName = await excel.cell(swapped.workbook, { sheet: 'Data', address: 'D4' });
+    assert.equal(swappedName.value, 'x');
+
+    // A merge blocks a move that would write over it, and the failing batch
+    // leaves the revision and the names untouched.
+    const merged = await excel.edit(swapped.workbook, {
+        operations: [{ op: 'merge.set', sheet: 'Data', start: 'G1', end: 'H1', merge: true }],
+    });
+    const revisionBefore = merged.revision;
+    await assert.rejects(
+        excel.edit(merged.workbook, {
+            operations: [
+                { op: 'name.define', name: 'Blocked', sheet: 'Data', range: 'G1:H1' },
+                { op: 'range.move', sheet: 'Sheet1', range: 'A1:B2', target: 'G1', targetSheet: 'Data' },
+            ],
+        }),
+        (error) => error instanceof OpenExcelError && error.code === 'session/argument-invalid',
+    );
+    const after = await excel.summary(merged.workbook);
+    assert.equal(after.revision, revisionBefore);
+    assert.equal(after.names.filter((entry) => entry.name === 'Blocked').length, 0);
+    await excel.dispose();
+});

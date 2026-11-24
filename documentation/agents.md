@@ -83,16 +83,18 @@ open-excel create --out ledger.oexcel --title Ledger --overwrite
 open-excel open ledger.oexcel
 ```
 
-The range/layout/sheet subcommands remain for compatibility and existing callers. New agents should batch the same changes through the SDK, recalculate explicitly, inspect the result and reopen the saved project:
+The range/layout/sheet subcommands remain for compatibility and existing callers. New agents should batch the same changes through the SDK, write numeric values and explicit `{ formula }` cells, recalculate, assert the computed results, inspect the tracked workbook and reopen both the native project and the exported package:
 
 ```ts
+import assert from 'node:assert/strict';
+
 import { OpenExcel } from '@wae/open-excel';
 
 const excel = new OpenExcel({ locale: 'en' });
-const book = await excel.open({ path: 'ledger.xlsx' });
+const book = await excel.create({ title: 'Ledger' });
 
-// One atomic batch: seed rows, add formulas, style the header.
-await excel.edit(book, {
+// One atomic batch: numeric seeds plus explicit formula cells.
+const edited = await excel.edit(book, {
     expectedRevision: book.revision,
     operations: [
         {
@@ -101,29 +103,43 @@ await excel.edit(book, {
             start: 'A1',
             rows: [
                 ['Region', 'Q1', 'Q2', 'Total'],
-                ['North', '120', '140', '=B2+C2'],
-                ['South', '90', '110', '=B3+C3'],
+                ['North', 120, 140, null],
+                ['South', 90, 110, null],
             ],
         },
+        { op: 'cell.set', sheet: 'Sheet1', reference: 'D2', formula: '=B2+C2' },
+        { op: 'cell.set', sheet: 'Sheet1', reference: 'D3', formula: '=B3+C3' },
         { op: 'format.set', sheet: 'Sheet1', range: 'A1:D1', style: { bold: true, fill: '#eef2ff' } },
     ],
 });
 
-const recalc = await excel.recalc(book);
-const inspection = await excel.inspect(book, { checks: ['formulas', 'references', 'cycles'] });
+// Recalculate and assert the computed results, not just the formula text.
+const recalc = await excel.recalc(edited.workbook);
+assert.equal(recalc.changed, 2);
+assert.equal((await excel.cell(edited.workbook, { sheet: 'Sheet1', address: 'D2' })).value, 260);
+assert.equal((await excel.cell(edited.workbook, { sheet: 'Sheet1', address: 'D3' })).value, 200);
 
-const xlsx = await excel.export(book, { format: 'xlsx', target: 'ledger-final.xlsx', overwrite: true });
-await excel.save(book, { target: 'ledger-final.oexcel', overwrite: true });
+// Inspect the tracked workbook; a `{ path }` input is also accepted for
+// handle-free checks of a package that is never opened.
+const inspection = await excel.inspect(edited.workbook, { checks: ['formulas', 'references', 'cycles'] });
+
+// Write the exchange package and the native project, then reopen both.
+const xlsx = await excel.export(edited.workbook, { format: 'xlsx', target: 'ledger-final.xlsx', overwrite: true });
+await excel.save(edited.workbook, { target: 'ledger-final.oexcel', overwrite: true });
 await excel.dispose();
 
-// Reopen the native project instead of trusting the writer.
 const reopened = new OpenExcel();
-const again = await reopened.open({ path: 'ledger-final.oexcel' });
-console.log(recalc.changed, inspection.passed, xlsx.target, again.revision);
+for (const path of ['ledger-final.oexcel', 'ledger-final.xlsx']) {
+    const restored = await reopened.open({ path });
+    const total = await reopened.cell(restored, { sheet: 'Sheet1', address: 'D2' });
+    assert.equal(total.formula, '=B2+C2');
+    assert.equal(total.value, 260);
+}
 await reopened.dispose();
+console.log(recalc.changed, inspection.passed, xlsx.target);
 ```
 
-`export` refuses to overwrite: delete the old file or choose a new target. `inspect` reports findings with stable codes and `passed`; treat `error` severity as a failed delivery.
+`export` honours `overwrite` like `save` does; without it an existing target is `io/target-exists`. `inspect` reports findings with stable codes and `passed`; treat `error` severity as a failed delivery.
 
 ## Edit operation shape
 
