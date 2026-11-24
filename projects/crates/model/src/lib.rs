@@ -2252,13 +2252,11 @@ fn copy_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
     if let Some(merged) = blocked {
         return Err(ServiceError::argument(format!("`range.copy` cannot copy merged range `{}`", merged.reference())));
     }
-    if !same_sheet {
-        if let Some(merged) = project.sheets[target_index].merged.iter().find(|merged| merged.overlaps(&destination)) {
-            return Err(ServiceError::argument(format!(
-                "`range.copy` cannot write over merged range `{}`",
-                merged.reference()
-            )));
-        }
+    if !same_sheet && let Some(merged) = project.sheets[target_index].merged.iter().find(|merged| merged.overlaps(&destination)) {
+        return Err(ServiceError::argument(format!(
+            "`range.copy` cannot write over merged range `{}`",
+            merged.reference()
+        )));
     }
     let matrix = (range.start_row..=range.end_row)
         .map(|row| (range.start_column..=range.end_column).map(|column| source.cell(row, column).cloned()).collect::<Vec<_>>())
@@ -2336,13 +2334,11 @@ fn move_range(project: &mut Project, operation: &Value) -> Result<CellRange, Ser
     if let Some(merged) = blocked {
         return Err(ServiceError::argument(format!("`range.move` cannot move merged range `{}`", merged.reference())));
     }
-    if !same_sheet {
-        if let Some(merged) = project.sheets[target_index].merged.iter().find(|merged| merged.overlaps(&destination)) {
-            return Err(ServiceError::argument(format!(
-                "`range.move` cannot write over merged range `{}`",
-                merged.reference()
-            )));
-        }
+    if !same_sheet && let Some(merged) = project.sheets[target_index].merged.iter().find(|merged| merged.overlaps(&destination)) {
+        return Err(ServiceError::argument(format!(
+            "`range.move` cannot write over merged range `{}`",
+            merged.reference()
+        )));
     }
     if same_sheet && destination == range {
         return Ok(destination);

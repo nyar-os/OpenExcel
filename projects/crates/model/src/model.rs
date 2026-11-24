@@ -107,7 +107,7 @@ impl Project {
             sheet.normalize();
         }
         self.names.retain(|named| self.sheets.iter().any(|sheet| sheet.id == named.sheet));
-        self.names.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+        self.names.sort_by_key(|named| named.name.to_lowercase());
         self.names.dedup_by(|left, right| left.name.eq_ignore_ascii_case(&right.name));
         self.reindex();
     }

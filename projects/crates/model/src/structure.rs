@@ -172,7 +172,7 @@ pub(crate) fn insert_range(project: &mut Project, operation: &Value) -> Result<C
         sheet.set_cell(cell);
     }
     for merged in &mut sheet.merged {
-        let (low, high, across_low, across_high) = band_span(merged, axis);
+        let (low, _, across_low, across_high) = band_span(merged, axis);
         if across_low <= across_end && across_high >= across_start && low >= at {
             match axis {
                 Axis::Row => {
@@ -319,7 +319,7 @@ fn check_band_insert(sheet: &Sheet, at: u32, count: u32, across_start: u32, acro
         in_band(across) && overflows(line)
     };
     let merge_overflows = |merged: &CellRange| {
-        let (low, high, across_low, across_high) = band_span(merged, axis);
+        let (_, high, across_low, across_high) = band_span(merged, axis);
         across_low <= across_end && across_high >= across_start && overflows(high)
     };
     let merge_crosses = |merged: &CellRange| {
@@ -353,23 +353,21 @@ fn check_band_insert(sheet: &Sheet, at: u32, count: u32, across_start: u32, acro
 
 /// Grows the declared dimension and auto filter across a band insertion line.
 fn grow_band_span(sheet: &mut Sheet, axis: Axis, at: u32, count: u32) {
-    for rectangle in [&mut sheet.dimension, &mut sheet.auto_filter] {
-        if let Some(range) = rectangle {
-            match axis {
-                Axis::Row if range.end_row >= at => {
-                    if range.start_row >= at {
-                        range.start_row += count;
-                    }
-                    range.end_row += count;
+    for range in [&mut sheet.dimension, &mut sheet.auto_filter].into_iter().flatten() {
+        match axis {
+            Axis::Row if range.end_row >= at => {
+                if range.start_row >= at {
+                    range.start_row += count;
                 }
-                Axis::Column if range.end_column >= at => {
-                    if range.start_column >= at {
-                        range.start_column += count;
-                    }
-                    range.end_column += count;
-                }
-                _ => {}
+                range.end_row += count;
             }
+            Axis::Column if range.end_column >= at => {
+                if range.start_column >= at {
+                    range.start_column += count;
+                }
+                range.end_column += count;
+            }
+            _ => {}
         }
     }
 }
@@ -848,7 +846,7 @@ fn check_insert_names(
 }
 
 /// Moves the named ranges on one sheet down by `count`, expanding crossings.
-fn shift_named_rows(names: &mut Vec<NamedRange>, sheet: &str, start: u32, count: u32) {
+fn shift_named_rows(names: &mut [NamedRange], sheet: &str, start: u32, count: u32) {
     for named in names.iter_mut().filter(|named| named.sheet == sheet) {
         let range = &mut named.range;
         if range.end_row < start {
@@ -862,7 +860,7 @@ fn shift_named_rows(names: &mut Vec<NamedRange>, sheet: &str, start: u32, count:
 }
 
 /// Moves the named ranges on one sheet right by `count`, expanding crossings.
-fn shift_named_columns(names: &mut Vec<NamedRange>, sheet: &str, start: u32, count: u32) {
+fn shift_named_columns(names: &mut [NamedRange], sheet: &str, start: u32, count: u32) {
     for named in names.iter_mut().filter(|named| named.sheet == sheet) {
         let range = &mut named.range;
         if range.end_column < start {
