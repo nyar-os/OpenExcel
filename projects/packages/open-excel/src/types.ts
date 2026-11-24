@@ -487,6 +487,23 @@ export interface RangeFillOperation {
     readonly direction: 'down' | 'up' | 'left' | 'right';
 }
 
+/**
+ * Inserts an empty `range`, shifting the cells inside its band over.
+ *
+ * `down` pushes the cells below the rectangle (in the rectangle's columns) down
+ * by its height; `right` pushes the cells to its right (in its rows) right by
+ * its width. Moved cells keep their styles and formula sources, references
+ * elsewhere on the sheet follow them, and merges fully inside the shifted band
+ * move with it. A merge crossing the insertion line is rejected. Row heights,
+ * column widths, frozen panes and defined names stay put.
+ */
+export interface RangeInsertOperation {
+    readonly op: 'range.insert';
+    readonly sheet: string;
+    readonly range: string;
+    readonly shift: 'down' | 'right';
+}
+
 /** One operation of `Workbook.edit()`. */
 export type EditOperation =
     | {
@@ -865,6 +882,7 @@ export type EditOperation =
     | RangeSwapOperation
     | RangeFlipOperation
     | RangeFillOperation
+    | RangeInsertOperation
     | { readonly op: 'range.clear'; readonly sheet: string; readonly range: string };
 
 /** Request of `Workbook.edit()`. */

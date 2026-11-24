@@ -134,6 +134,179 @@ pub(crate) fn swap_columns(project: &mut Project, operation: &Value) -> Result<(
     Ok(())
 }
 
+/// Inserts an empty rectangle, shifting the cells below or beside it over.
+///
+/// `shift` is `down` or `right`. Cells inside the band move as a block with
+/// their styles and formula sources; references elsewhere on the sheet follow
+/// them. Merges fully inside the shifted band move with it, while a merge that
+/// crosses the insertion line is rejected. Row heights, column widths, frozen
+/// panes and defined names stay put because only part of the grid moves.
+pub(crate) fn insert_range(project: &mut Project, operation: &Value) -> Result<CellRange, ServiceError> {
+    let index = sheet_index(project, operation)?;
+    let range = required_rectangle(operation, "range.insert")?;
+    let direction = required_direction(operation, "range.insert", "down", "right")?;
+    let axis = if direction == "down" { Axis::Row } else { Axis::Column };
+    let (at, count, across_start, across_end) = match axis {
+        Axis::Row => (range.start_row, range.rows(), range.start_column, range.end_column),
+        Axis::Column => (range.start_column, range.columns(), range.start_row, range.end_row),
+    };
+    let sheet = &mut project.sheets[index];
+    check_band_insert(sheet, at, count, across_start, across_end, axis)?;
+    let mut moved: Vec<Cell> = Vec::new();
+    sheet.cells.retain(|cell| {
+        let (line, across) = line_across(cell, axis);
+        if (across_start..=across_end).contains(&across) && line >= at {
+            moved.push(cell.clone());
+            false
+        }
+        else {
+            true
+        }
+    });
+    for mut cell in moved {
+        match axis {
+            Axis::Row => cell.row += count,
+            Axis::Column => cell.column += count,
+        }
+        cell.reference = reference::format_reference(cell.row, cell.column);
+        sheet.set_cell(cell);
+    }
+    for merged in &mut sheet.merged {
+        let (low, high, across_low, across_high) = band_span(merged, axis);
+        if across_low <= across_end && across_high >= across_start && low >= at {
+            match axis {
+                Axis::Row => {
+                    merged.start_row += count;
+                    merged.end_row += count;
+                }
+                Axis::Column => {
+                    merged.start_column += count;
+                    merged.end_column += count;
+                }
+            }
+        }
+    }
+    grow_band_span(sheet, axis, at, count);
+    let target = project.sheets[index].name.clone();
+    shift::shift_project(project, &target, axis, Shift::BandInsert { at, count, across_start, across_end });
+    project.normalize();
+    Ok(range)
+}
+
+/// Reads the required A1 rectangle of a range edit.
+fn required_rectangle(operation: &Value, op: &str) -> Result<CellRange, ServiceError> {
+    let range = operation
+        .get("range")
+        .and_then(Value::as_str)
+        .and_then(reference::parse_range)
+        .ok_or_else(|| ServiceError::argument(format!("`{op}` needs an A1 range such as `A1:B2`")))?;
+    if !range.is_valid() || range.end_row > MAX_ROW || range.end_column > MAX_COLUMN {
+        return Err(ServiceError::argument(format!("range `{}` leaves the sheet grid", range.reference())));
+    }
+    Ok(range)
+}
+
+/// Reads the required shift direction of a range edit.
+fn required_direction<'a>(operation: &'a Value, op: &str, first: &'a str, second: &'a str) -> Result<&'a str, ServiceError> {
+    let value = operation
+        .get("shift")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ServiceError::argument(format!("`{op}` needs a `shift` of `{first}` or `{second}`")))?;
+    if value.eq_ignore_ascii_case(first) {
+        return Ok(first);
+    }
+    if value.eq_ignore_ascii_case(second) {
+        return Ok(second);
+    }
+    Err(ServiceError::argument(format!("`{value}` is not a shift direction; `{op}` needs `{first}` or `{second}`")))
+}
+
+/// Line span and across span of a rectangle along an axis.
+fn band_span(rectangle: &CellRange, axis: Axis) -> (u32, u32, u32, u32) {
+    match axis {
+        Axis::Row => (rectangle.start_row, rectangle.end_row, rectangle.start_column, rectangle.end_column),
+        Axis::Column => (rectangle.start_column, rectangle.end_column, rectangle.start_row, rectangle.end_row),
+    }
+}
+
+/// Line and across coordinates of a cell along an axis.
+fn line_across(cell: &Cell, axis: Axis) -> (u32, u32) {
+    match axis {
+        Axis::Row => (cell.row, cell.column),
+        Axis::Column => (cell.column, cell.row),
+    }
+}
+
+/// Rejects a band insert that would push existing content past the grid.
+fn check_band_insert(sheet: &Sheet, at: u32, count: u32, across_start: u32, across_end: u32, axis: Axis) -> Result<(), ServiceError> {
+    let (max, unit) = match axis {
+        Axis::Row => (MAX_ROW, "row"),
+        Axis::Column => (MAX_COLUMN, "column"),
+    };
+    let in_band = |across: u32| (across_start..=across_end).contains(&across);
+    let overflows = |line: u32| line >= at && line + count > max;
+    let cell_overflows = |cell: &Cell| {
+        let (line, across) = line_across(cell, axis);
+        in_band(across) && overflows(line)
+    };
+    let merge_overflows = |merged: &CellRange| {
+        let (low, high, across_low, across_high) = band_span(merged, axis);
+        across_low <= across_end && across_high >= across_start && overflows(high)
+    };
+    let merge_crosses = |merged: &CellRange| {
+        let (low, high, across_low, across_high) = band_span(merged, axis);
+        across_low <= across_end && across_high >= across_start && low < at && high >= at
+    };
+    if let Some(merged) = sheet.merged.iter().find(|merged| merge_crosses(merged)) {
+        return Err(ServiceError::argument(format!(
+            "`range.insert` cannot insert through merged range `{}`",
+            merged.reference()
+        )));
+    }
+    if sheet.cells.iter().any(cell_overflows) || sheet.merged.iter().any(merge_overflows) {
+        return Err(ServiceError::argument(format!(
+            "`range.insert` would push content past {unit} {max}"
+        )));
+    }
+    if sheet.dimension.is_some_and(|rectangle| {
+        let (_, high, _, _) = band_span(&rectangle, axis);
+        overflows(high)
+    }) || sheet.auto_filter.is_some_and(|rectangle| {
+        let (_, high, _, _) = band_span(&rectangle, axis);
+        overflows(high)
+    }) {
+        return Err(ServiceError::argument(format!(
+            "`range.insert` would push the declared range past {unit} {max}"
+        )));
+    }
+    Ok(())
+}
+
+/// Grows the declared dimension and auto filter across a band insertion line.
+fn grow_band_span(sheet: &mut Sheet, axis: Axis, at: u32, count: u32) {
+    for rectangle in [&mut sheet.dimension, &mut sheet.auto_filter] {
+        if let Some(range) = rectangle {
+            match axis {
+                Axis::Row if range.end_row >= at => {
+                    if range.start_row >= at {
+                        range.start_row += count;
+                    }
+                    range.end_row += count;
+                }
+                Axis::Column if range.end_column >= at => {
+                    if range.start_column >= at {
+                        range.start_column += count;
+                    }
+                    range.end_column += count;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Rejects a swap where a merged range crosses one of the two lines.
 fn check_swap_merges(
     merged: &[CellRange],

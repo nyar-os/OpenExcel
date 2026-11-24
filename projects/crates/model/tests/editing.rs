@@ -1468,3 +1468,71 @@ fn line_swap_rejects_bad_lines_unknown_sheets_and_straddling_merges() {
     assert_eq!(edited["revision"], json!(2));
     engine::close(handle).expect("close");
 }
+
+#[test]
+fn range_insert_shifts_cells_down_or_right() {
+    let project_path = temp_path("range-insert", "oexcel");
+    let created = engine::create(&json!({ "title": "RangeInsert" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let edited = engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [[1], [2], [3]] },
+                { "op": "range.set", "sheet": "Sheet1", "start": "B1", "rows": [["x", "y"]] },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "A4", "end": "A5", "merge": true },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "C1", "formula": "=SUM(A1:A3)" },
+                { "op": "range.insert", "sheet": "Sheet1", "range": "A2:A2", "shift": "down" },
+                { "op": "range.insert", "sheet": "Sheet1", "range": "B1:B1", "shift": "right" },
+            ]
+        }),
+    )
+    .expect("insert ranges");
+    assert_eq!(
+        edited["affected"],
+        json!([
+            { "op": "range.insert", "sheet": "Sheet1", "range": "A2:A2" },
+            { "op": "range.insert", "sheet": "Sheet1", "range": "B1:B1" },
+        ])
+    );
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    let cells = sheet["cells"].as_array().expect("cells");
+    assert_eq!(cell_json(sheet, "A1")["value"]["number"], json!(1.0));
+    assert!(cells.iter().all(|cell| cell["reference"] != json!("A2")), "the inserted row is empty");
+    assert_eq!(cell_json(sheet, "A3")["value"]["number"], json!(2.0));
+    assert_eq!(cell_json(sheet, "A4")["value"]["number"], json!(3.0));
+    assert!(cells.iter().all(|cell| cell["reference"] != json!("B1")), "the inserted column is empty");
+    assert_eq!(cell_json(sheet, "C1")["value"]["text"], json!("x"), "the right shift moved x from B1");
+    assert_eq!(cell_json(sheet, "D1")["formula"], json!("=SUM(A1:A4)"), "the formula cell shifted right and the range follows the inserted row");
+    let merged = sheet["merged"].as_array().expect("merged");
+    assert_eq!(merged.len(), 1);
+    assert_eq!((merged[0]["startRow"].clone(), merged[0]["endRow"].clone()), (json!(5), json!(6)), "the merge below the line moved down");
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn range_insert_rejects_bad_requests() {
+    let created = engine::create(&json!({ "title": "RangeInsertErrors" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({ "operations": [{ "op": "merge.set", "sheet": "Sheet1", "start": "A1", "end": "A3", "merge": true }] }),
+    )
+    .expect("seed merge");
+    for request in [
+        json!({ "operations": [{ "op": "range.insert", "sheet": "Sheet1", "range": "A2:A2" }] }),
+        json!({ "operations": [{ "op": "range.insert", "sheet": "Sheet1", "range": "A2:A2", "shift": "sideways" }] }),
+        json!({ "operations": [{ "op": "range.insert", "sheet": "Sheet1", "range": "nope", "shift": "down" }] }),
+        json!({ "operations": [{ "op": "range.insert", "sheet": "Nope", "range": "A2:A2", "shift": "down" }] }),
+        json!({ "operations": [{ "op": "range.insert", "sheet": "Sheet1", "range": "A2:A2", "shift": "down" }] }),
+    ] {
+        let error = engine::edit(handle, &request).expect_err("invalid insert request");
+        assert_eq!(error.code, if request["operations"][0]["sheet"] == json!("Nope") { "object/not-found" } else { "session/argument-invalid" });
+    }
+    assert_eq!(engine::summary(handle).expect("summary")["revision"], json!(1), "rejected batches never advance");
+    engine::close(handle).expect("close");
+}

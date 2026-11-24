@@ -1,4 +1,5 @@
-//! Moves A1 references when whole rows or columns are inserted or deleted.
+//! Moves A1 references when whole rows or columns are inserted, deleted or
+//! swapped, or when a range edit shifts a band of cells.
 //!
 //! A formula is scanned as text. String literals, error literals, function names,
 //! defined names and worksheet qualifiers stay verbatim. Only references that
@@ -45,6 +46,30 @@ pub(crate) enum Shift {
         first: u32,
         /// The other exchanged line.
         second: u32,
+    },
+    /// Insert `count` lines before `at`, moving only lines whose across-axis
+    /// coordinate lies in `across_start..=across_end`.
+    BandInsert {
+        /// First inserted line.
+        at: u32,
+        /// Number of inserted lines.
+        count: u32,
+        /// First across-axis line of the edited band.
+        across_start: u32,
+        /// Last across-axis line of the edited band.
+        across_end: u32,
+    },
+    /// Delete lines `start..=end`, removing and shifting only lines whose
+    /// across-axis coordinate lies in `across_start..=across_end`.
+    BandDelete {
+        /// First deleted line.
+        start: u32,
+        /// Last deleted line.
+        end: u32,
+        /// First across-axis line of the edited band.
+        across_start: u32,
+        /// Last across-axis line of the edited band.
+        across_end: u32,
     },
 }
 
@@ -460,7 +485,68 @@ fn shift_point(value: u32, axis: Axis, shift: Shift) -> PointShift {
                 PointShift::Kept
             }
         }
+        // Band shifts need the across-axis coordinate and are resolved by `shift_line`.
+        Shift::BandInsert { .. } | Shift::BandDelete { .. } => PointShift::Kept,
     }
+}
+
+/// Whether a shift only moves a band of across-axis lines.
+fn is_band(shift: Shift) -> bool {
+    matches!(shift, Shift::BandInsert { .. } | Shift::BandDelete { .. })
+}
+
+/// Coordinate of a reference on the axis perpendicular to the edit.
+fn across_coordinate(reference: &RefToken, axis: Axis) -> u32 {
+    match axis {
+        Axis::Row => reference.column,
+        Axis::Column => reference.row,
+    }
+}
+
+/// Maps one line through a shift, given its across-axis coordinate.
+fn shift_line(line: u32, across: u32, axis: Axis, shift: Shift) -> PointShift {
+    match shift {
+        Shift::BandInsert { at, count, across_start, across_end } => {
+            if (across_start..=across_end).contains(&across) {
+                shift_point(line, axis, Shift::Insert { at, count })
+            }
+            else {
+                PointShift::Kept
+            }
+        }
+        Shift::BandDelete { start, end, across_start, across_end } => {
+            if (across_start..=across_end).contains(&across) {
+                shift_point(line, axis, Shift::Delete { start, end })
+            }
+            else {
+                PointShift::Kept
+            }
+        }
+        other => shift_point(line, axis, other),
+    }
+}
+
+/// New line of one range endpoint under a band shift; `None` means it vanished.
+fn shift_endpoint(reference: &RefToken, axis: Axis, shift: Shift) -> Option<u32> {
+    match shift_line(coordinate(reference, axis), across_coordinate(reference, axis), axis, shift) {
+        PointShift::Kept => Some(coordinate(reference, axis)),
+        PointShift::Moved(value) => Some(value),
+        PointShift::Removed => None,
+    }
+}
+
+/// Line an endpoint inside a deleted band clamps to, given the surviving side.
+fn clamp_to_band(survivor: u32, shift: Shift) -> u32 {
+    let Shift::BandDelete { start, .. } = shift else {
+        return survivor;
+    };
+    if survivor >= start { start } else { start - 1 }
+}
+
+/// Orders two moved endpoints the way the original endpoints were ordered.
+fn orient(first: u32, second: u32, moved_first: u32, moved_second: u32) -> (u32, u32) {
+    if first <= second { (moved_first.min(moved_second), moved_first.max(moved_second)) }
+    else { (moved_first.max(moved_second), moved_first.min(moved_second)) }
 }
 
 /// Rewrites a single reference or a range.
@@ -473,10 +559,10 @@ fn rewrite_group(group: &Group, axis: Axis, shift: Shift) -> Transformed {
 
 /// Rewrites one single reference.
 fn rewrite_single(reference: &RefToken, axis: Axis, shift: Shift) -> Transformed {
-    if !applies(reference.kind, axis) {
+    if !applies(reference.kind, axis) || (is_band(shift) && reference.kind != RefKind::Cell) {
         return Transformed::Unchanged;
     }
-    match shift_point(coordinate(reference, axis), axis, shift) {
+    match shift_line(coordinate(reference, axis), across_coordinate(reference, axis), axis, shift) {
         PointShift::Kept => Transformed::Unchanged,
         PointShift::Moved(value) => Transformed::Text(render_ref(reference, axis, value)),
         PointShift::Removed => Transformed::Deleted,
@@ -495,6 +581,29 @@ fn rewrite_range(group: &Group, axis: Axis, shift: Shift) -> Transformed {
     }
     let first = coordinate(&left, axis);
     let second = coordinate(right, axis);
+    if is_band(shift) {
+        if left.kind != RefKind::Cell {
+            return Transformed::Unchanged;
+        }
+        // Each endpoint moves on its own across-axis coordinate. A deleted
+        // endpoint clamps toward the surviving one, like a whole-line delete.
+        let (new_first, new_second) = match (shift_endpoint(&left, axis, shift), shift_endpoint(right, axis, shift)) {
+            (None, None) => return Transformed::Deleted,
+            (None, Some(survivor)) => orient(first, second, clamp_to_band(survivor, shift), survivor),
+            (Some(survivor), None) => orient(first, second, survivor, clamp_to_band(survivor, shift)),
+            (Some(moved_first), Some(moved_second)) => orient(first, second, moved_first, moved_second),
+        };
+        if new_first == first && new_second == second {
+            return Transformed::Unchanged;
+        }
+        let mut text = render_ref(&left, axis, new_first);
+        text.push(':');
+        if let Some(qualifier) = qualifier {
+            text.push_str(&qualifier.raw);
+        }
+        text.push_str(&render_ref(right, axis, new_second));
+        return Transformed::Text(text);
+    }
     let (low, high) = (first.min(second), first.max(second));
     let (new_low, new_high, changed) = match shift {
         Shift::Insert { at, count } => {
@@ -525,6 +634,8 @@ fn rewrite_range(group: &Group, axis: Axis, shift: Shift) -> Transformed {
                 (new_low, new_high, new_low != low || new_high != high)
             }
         }
+        // Band shifts return above; whole-line rules never see them here.
+        Shift::BandInsert { .. } | Shift::BandDelete { .. } => unreachable!("band ranges are rewritten per endpoint"),
     };
     if new_high > axis_max(axis) {
         return Transformed::Deleted;
@@ -663,5 +774,26 @@ mod tests {
     fn formulas_without_references_are_untouched() {
         assert_eq!(insert_row("=1+2", 1, 1), "=1+2");
         assert_eq!(insert_row("=SUM(1,2,3)", 1, 1), "=SUM(1,2,3)");
+    }
+
+    #[test]
+    fn band_inserts_only_move_cells_inside_the_band() {
+        let shift = Shift::BandInsert { at: 2, count: 1, across_start: 1, across_end: 2 };
+        assert_eq!(shift_formula("=A5+B5+C5", "Sheet1", "Sheet1", Axis::Row, shift), "=A6+B6+C5");
+        assert_eq!(shift_formula("=A1", "Sheet1", "Sheet1", Axis::Row, shift), "=A1");
+        assert_eq!(shift_formula("=SUM(A2:A5)", "Sheet1", "Sheet1", Axis::Row, shift), "=SUM(A3:A6)");
+        assert_eq!(shift_formula("=SUM(A2:C2)", "Sheet1", "Sheet1", Axis::Row, shift), "=SUM(A2:C3)");
+        assert_eq!(shift_formula("=SUM(1:1)", "Sheet1", "Sheet1", Axis::Row, shift), "=SUM(1:1)");
+    }
+
+    #[test]
+    fn band_deletes_only_remove_cells_inside_the_band() {
+        let shift = Shift::BandDelete { start: 2, end: 3, across_start: 1, across_end: 2 };
+        assert_eq!(shift_formula("=A5+C5", "Sheet1", "Sheet1", Axis::Row, shift), "=A3+C5");
+        assert_eq!(shift_formula("=A2", "Sheet1", "Sheet1", Axis::Row, shift), "=#REF!");
+        assert_eq!(shift_formula("=SUM(A2:A5)", "Sheet1", "Sheet1", Axis::Row, shift), "=SUM(A2:A3)");
+        assert_eq!(shift_formula("=SUM(A1:A2)", "Sheet1", "Sheet1", Axis::Row, shift), "=SUM(A1:A1)");
+        assert_eq!(shift_formula("=SUM(B2:B3)", "Sheet1", "Sheet1", Axis::Row, shift), "=SUM(#REF!)");
+        assert_eq!(shift_formula("=SUM(A2:C2)", "Sheet1", "Sheet1", Axis::Row, shift), "=SUM(A2:C2)");
     }
 }
