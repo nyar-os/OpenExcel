@@ -1547,6 +1547,73 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             }));
             0
         }
+        "range.round" => {
+            let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
+            let sheet_name = project.sheet(key).map(|sheet| sheet.name.clone()).unwrap_or_else(|| key.to_owned());
+            let range = operation
+                .get("range")
+                .and_then(Value::as_str)
+                .and_then(reference::parse_range)
+                .ok_or_else(|| ServiceError::argument("`range.round` needs an A1 range such as `A1:C4`"))?;
+            let places = match operation.get("places") {
+                None | Some(Value::Null) => 0,
+                Some(value) => value
+                    .as_u64()
+                    .and_then(|value| u32::try_from(value).ok())
+                    .filter(|value| *value <= 15)
+                    .ok_or_else(|| ServiceError::argument("`places` must be a whole number between 0 and 15"))?,
+            };
+            let mode = match operation.get("mode") {
+                None | Some(Value::Null) => "half-up",
+                Some(Value::String(text)) => match text.trim().to_ascii_lowercase().as_str() {
+                    "half-up" => "half-up",
+                    "up" => "up",
+                    "down" => "down",
+                    other => {
+                        return Err(ServiceError::argument(format!(
+                            "`{other}` is not a rounding mode; expected `half-up`, `up` or `down`"
+                        )));
+                    }
+                },
+                Some(_) => return Err(ServiceError::argument("`mode` must be `half-up`, `up` or `down`")),
+            };
+            let factor = 10f64.powi(places as i32);
+            let rounded = |number: f64| match mode {
+                "up" => number.signum() * (number.abs() * factor).ceil() / factor,
+                "down" => number.signum() * (number.abs() * factor).floor() / factor,
+                _ => (number * factor + 0.5).floor() / factor,
+            };
+            let sheet = project.sheet_mut(key).ok_or_else(|| missing_sheet(key))?;
+            let mut changed = 0usize;
+            for row in range.start_row..=range.end_row {
+                for column in range.start_column..=range.end_column {
+                    let Some(mut cell) = sheet.cell(row, column).cloned()
+                    else {
+                        continue;
+                    };
+                    if cell.formula.is_some() {
+                        continue;
+                    }
+                    let CellValue::Number { number } = &cell.value
+                    else {
+                        continue;
+                    };
+                    let next = rounded(*number);
+                    if next != *number {
+                        cell.value = CellValue::number(next);
+                        sheet.set_cell(cell);
+                        changed += 1;
+                    }
+                }
+            }
+            affected.push(json!({
+                "op": "range.round",
+                "sheet": sheet_name,
+                "range": range.reference(),
+                "changed": changed,
+            }));
+            0
+        }
         "sheet.duplicate" => {
             let key = operation.get("sheet").and_then(Value::as_str).unwrap_or("");
             let index = project.sheet_index(key).ok_or_else(|| missing_sheet(key))?;

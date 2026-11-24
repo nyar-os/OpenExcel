@@ -1515,6 +1515,63 @@ fn range_insert_shifts_cells_down_or_right() {
 }
 
 #[test]
+fn range_round_applies_places_and_modes() {
+    let created = engine::create(&json!({ "title": "RangeRound" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [[1.239], [-1.239], [2.5], [-2.5], [1.1], [-1.1], [1.9], [-1.9], ["text"]] },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A11", "formula": "=1.239" },
+                { "op": "range.round", "sheet": "Sheet1", "range": "A1:A2", "places": 2 },
+                { "op": "range.round", "sheet": "Sheet1", "range": "A3:A4" },
+                { "op": "range.round", "sheet": "Sheet1", "range": "A5:A6", "mode": "up" },
+                { "op": "range.round", "sheet": "Sheet1", "range": "A7:A8", "mode": "down" },
+                { "op": "range.round", "sheet": "Sheet1", "range": "A9:A11" },
+            ]
+        }),
+    )
+    .expect("round ranges");
+    let read = |reference: &str| engine::cell(handle, &json!({ "sheet": "Sheet1", "address": reference })).expect(reference)["value"].clone();
+    assert_eq!(read("A1"), json!(1.24));
+    assert_eq!(read("A2"), json!(-1.24));
+    assert_eq!(read("A3"), json!(3), "half-up rounds .5 up");
+    assert_eq!(read("A4"), json!(-2), "half-up rounds -.5 toward positive");
+    assert_eq!(read("A5"), json!(2), "up rounds away from zero");
+    assert_eq!(read("A6"), json!(-2), "up rounds negatives away from zero");
+    assert_eq!(read("A7"), json!(1), "down rounds toward zero");
+    assert_eq!(read("A8"), json!(-1), "down rounds negatives toward zero");
+    assert_eq!(read("A9"), json!("text"), "text is left alone");
+    assert_eq!(read("A11"), json!(1.239), "formula cells keep their computed value");
+    engine::close(handle).expect("close");
+}
+
+#[test]
+fn range_round_reports_changed_count_and_rejects_bad_requests() {
+    let created = engine::create(&json!({ "title": "RangeRoundErrors" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({ "operations": [{ "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [[1.5], [2.0]] }] }),
+    )
+    .expect("seed numbers");
+    let edited = engine::edit(handle, &json!({ "operations": [{ "op": "range.round", "sheet": "Sheet1", "range": "A1:A2" }] })).expect("round");
+    assert_eq!(edited["affected"][0], json!({ "op": "range.round", "sheet": "Sheet1", "range": "A1:A2", "changed": 1 }));
+    for request in [
+        json!({ "operations": [{ "op": "range.round", "sheet": "Sheet1", "range": "A1:A2", "places": 16 }] }),
+        json!({ "operations": [{ "op": "range.round", "sheet": "Sheet1", "range": "A1:A2", "places": -1 }] }),
+        json!({ "operations": [{ "op": "range.round", "sheet": "Sheet1", "range": "A1:A2", "mode": "banker" }] }),
+        json!({ "operations": [{ "op": "range.round", "sheet": "Sheet1" }] }),
+        json!({ "operations": [{ "op": "range.round", "sheet": "Nope", "range": "A1:A2" }] }),
+    ] {
+        let error = engine::edit(handle, &request).expect_err("invalid round request");
+        assert_eq!(error.code, if request["operations"][0]["sheet"] == json!("Nope") { "object/not-found" } else { "session/argument-invalid" });
+    }
+    engine::close(handle).expect("close");
+}
+
+#[test]
 fn range_insert_rejects_bad_requests() {
     let created = engine::create(&json!({ "title": "RangeInsertErrors" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");

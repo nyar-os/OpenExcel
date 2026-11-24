@@ -792,6 +792,22 @@ export type EditOperation =
           /** Collapse internal whitespace runs into single spaces. */
           readonly collapse?: boolean;
       }
+    | {
+          /**
+           * Rounds every numeric value in `range` to `places` decimal places
+           * (default 0). `mode` picks the tie direction: `half-up` (default)
+           * rounds .5 toward positive infinity, `up` away from zero and `down`
+           * toward zero. Formula and text cells are skipped; the count of
+           * changed cells is reported in `affected`.
+           */
+          readonly op: 'range.round';
+          readonly sheet: string;
+          readonly range: string;
+          /** Decimal places to keep, 0 to 15; defaults to 0. */
+          readonly places?: number;
+          /** Tie direction; defaults to `half-up`. */
+          readonly mode?: 'half-up' | 'up' | 'down';
+      }
     | { readonly op: 'sheet.add'; readonly name: string; readonly index?: number }
     | { readonly op: 'sheet.rename'; readonly sheet: string; readonly name: string }
     | { readonly op: 'sheet.remove'; readonly sheet: string }
