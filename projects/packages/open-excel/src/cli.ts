@@ -10,8 +10,10 @@
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { createCli } from '@wae/commander';
+import { CliError, createCli } from '@wae/commander';
+import type { CommandContext } from '@wae/commander';
 
+import { isOpenExcelError } from './errors.js';
 import { OpenExcel } from './open-excel.js';
 import { runGui } from './gui.js';
 import type {
@@ -34,11 +36,23 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 const cli = createCli('open-excel').locales(path.join(here, '..', 'locales')).intro('cli.intro');
 
-/** Runs `work` against one session and always releases its handles. */
-async function withSession<T>(work: (excel: OpenExcel) => Promise<T>): Promise<T> {
-    const excel = new OpenExcel();
+/**
+ * Runs `work` against one session and always releases its handles.
+ *
+ * The session locale follows the CLI `--locale`, so the SDK renders its error
+ * copy in the requested language. An `OpenExcelError` rethrows as a `CliError`
+ * carrying the same stable code, so `--json` consumers branch on the SDK
+ * contract instead of the framework's `commander::action_failed`.
+ */
+async function withSession<T>(ctx: CommandContext, work: (excel: OpenExcel) => Promise<T>): Promise<T> {
+    const excel = new OpenExcel({ locale: ctx.locale });
     try {
         return await work(excel);
+    } catch (error) {
+        if (isOpenExcelError(error)) {
+            throw CliError.from(error, error.code);
+        }
+        throw error;
     } finally {
         await excel.dispose();
     }
@@ -171,7 +185,7 @@ function parseOperations(value: string): EditOperation[] | undefined {
 }
 
 cli.command('capabilities', 'cli.cmd.capabilities').actionCtx(async (_options, _args, ctx) => {
-    const matrix = await withSession((excel) => excel.capabilities());
+    const matrix = await withSession(ctx, (excel) => excel.capabilities());
     ctx.emitResult(matrix, describeCapabilities(matrix));
     return 0;
 });
@@ -188,7 +202,7 @@ cli
             ctx.fail('open-excel.cli.out-required', { message: '`--out <file>` is required' });
             return 2;
         }
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.create({ title: text(options, 'title'), template: text(options, 'template') });
             const report = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
             ctx.emitResult(
@@ -205,7 +219,7 @@ cli.command('summary', 'cli.cmd.summary').actionCtx(async (options, _args, ctx) 
         ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
         return 2;
     }
-    await withSession(async (excel) => {
+    await withSession(ctx, async (excel) => {
         const workbook = await excel.open({ path: file });
         const summary = await excel.summary(workbook);
         ctx.emitResult(summary, describeWorkbook(summary));
@@ -224,7 +238,7 @@ cli
             return 2;
         }
         const out = text(options, 'out') ?? file;
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const report = await excel.save(workbook, { target: out, overwrite: flag(options, 'overwrite') });
             ctx.emitResult(report, `saved ${out} revision=${report.revision} sheets=${report.sheets}`);
@@ -289,7 +303,7 @@ cli
             ];
             label = reference;
         }
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.edit(workbook, { operations });
             const out = text(options, 'out');
@@ -339,7 +353,7 @@ cli
             ascending: !flag(options, 'descending'),
             hasHeader: flag(options, 'header'),
         };
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.edit(workbook, { operations: [operation] });
             const out = text(options, 'out');
@@ -381,7 +395,7 @@ cli
         }
         const sheet = text(options, 'sheet') ?? 'Sheet1';
         const operation: EditOperation = { op: 'range.copy', sheet, range, target };
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.edit(workbook, { operations: [operation] });
             const out = text(options, 'out');
@@ -423,7 +437,7 @@ cli
         }
         const sheet = text(options, 'sheet') ?? 'Sheet1';
         const operation: EditOperation = { op: 'range.move', sheet, range, target };
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.edit(workbook, { operations: [operation] });
             const out = text(options, 'out');
@@ -465,7 +479,7 @@ cli
         }
         const sheet = text(options, 'sheet') ?? 'Sheet1';
         const operation: EditOperation = { op: 'range.swap', sheet, range, target };
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.edit(workbook, { operations: [operation] });
             const out = text(options, 'out');
@@ -507,7 +521,7 @@ cli
         }
         const sheet = text(options, 'sheet') ?? 'Sheet1';
         const operation: EditOperation = { op: 'range.flip', sheet, range, axis };
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.edit(workbook, { operations: [operation] });
             const out = text(options, 'out');
@@ -571,7 +585,7 @@ cli
             matchCase: flag(options, 'match-case'),
             limit,
         };
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.edit(workbook, { operations: [operation] });
             const effect = result.affected?.find((entry) => entry.op === 'cell.replaceText');
@@ -675,7 +689,7 @@ cli
         }
         const sheet = text(options, 'sheet') ?? 'Sheet1';
         const operation: EditOperation = { op: 'format.set', sheet, range, style };
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.edit(workbook, { operations: [operation] });
             const out = text(options, 'out');
@@ -752,7 +766,7 @@ cli
             labels.push(`row ${rawRow}`);
         }
         const label = labels.join(' and ');
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.edit(workbook, { operations });
             const out = text(options, 'out');
@@ -804,6 +818,8 @@ cli
         }
         if (row + count - 1 > 1_048_576) {
             ctx.fail('open-excel.cli.row-band-invalid', {
+                first: String(row),
+                last: String(row + count - 1),
                 message: `rows ${row}..${row + count - 1} leave the sheet at row 1048576`,
             });
             return 2;
@@ -814,7 +830,7 @@ cli
                 ? { op: 'row.insert', sheet, row, count }
                 : { op: 'row.delete', sheet, row, count };
         const label = `${insert !== undefined ? 'inserted' : 'deleted'} ${count} row${count === 1 ? '' : 's'} at ${row} in ${sheet}`;
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.edit(workbook, { operations: [operation] });
             const out = text(options, 'out');
@@ -878,6 +894,8 @@ cli
         }
         if (typeof column === 'number' && column + count - 1 > 16_384) {
             ctx.fail('open-excel.cli.column-band-invalid', {
+                first: String(column),
+                last: String(column + count - 1),
                 message: `columns ${column}..${column + count - 1} leave the sheet at column 16384`,
             });
             return 2;
@@ -888,7 +906,7 @@ cli
                 ? { op: 'column.insert', sheet, column, count }
                 : { op: 'column.delete', sheet, column, count };
         const label = `${insert !== undefined ? 'inserted' : 'deleted'} ${count} column${count === 1 ? '' : 's'} at ${rawColumn} in ${sheet}`;
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.edit(workbook, { operations: [operation] });
             const out = text(options, 'out');
@@ -955,7 +973,7 @@ cli
             operation = { op: 'sheet.freeze', sheet, rows: rows as number, columns: columns as number };
             label = `froze ${rows} rows and ${columns} columns on ${sheet}`;
         }
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.edit(workbook, { operations: [operation] });
             const out = text(options, 'out');
@@ -1059,7 +1077,7 @@ cli
             operation = { op: 'sheet.move', sheet: move as string, index };
             label = `moved ${move} to ${index}`;
         }
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.edit(workbook, { operations: [operation] });
             const out = text(options, 'out');
@@ -1079,7 +1097,7 @@ cli.command('open', 'cli.cmd.open').actionCtx(async (options, _args, ctx) => {
         ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
         return 2;
     }
-    await withSession(async (excel) => {
+    await withSession(ctx, async (excel) => {
         const workbook = await excel.open({ path: file });
         ctx.emitResult(workbook, describeWorkbook(workbook));
     });
@@ -1096,7 +1114,7 @@ cli
             return 2;
         }
         let passed = false;
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const report = await excel.inspect({ path: file }, { checks: parseChecks(text(options, 'checks')) });
             ctx.emitResult(report, describeReport(report));
             passed = report.passed;
@@ -1118,7 +1136,7 @@ cli
             ctx.fail('open-excel.cli.address-required', { message: 'an A1 cell address such as `B4` is required' });
             return 2;
         }
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const detail = await excel.cell(workbook, { sheet: text(options, 'sheet'), address });
             ctx.emitResult(detail, describeCell(detail));
@@ -1140,7 +1158,7 @@ cli
             ctx.fail('open-excel.cli.range-required', { message: 'an A1 range such as `A1:C4` is required' });
             return 2;
         }
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const matrix = await excel.range(workbook, { sheet: text(options, 'sheet'), range });
             ctx.emitResult(matrix, describeRange(matrix));
@@ -1154,7 +1172,7 @@ cli.command('recalc', 'cli.cmd.recalc').actionCtx(async (options, _args, ctx) =>
         ctx.fail('open-excel.cli.file-required', { message: 'a project file is required' });
         return 2;
     }
-    await withSession(async (excel) => {
+    await withSession(ctx, async (excel) => {
         const workbook = await excel.open({ path: file });
         const report = await excel.recalc(workbook);
         ctx.emitResult(report, describeRecalc(report));
@@ -1177,7 +1195,7 @@ cli
             return 2;
         }
         const sheet = text(options, 'sheet');
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const result = await excel.find(workbook, sheet === undefined ? { query } : { query, sheet });
             ctx.emitResult(result, describeFind(result));
@@ -1211,7 +1229,7 @@ cli
             ctx.fail('open-excel.cli.out-required', { message: '`--out <file>` is required' });
             return 2;
         }
-        await withSession(async (excel) => {
+        await withSession(ctx, async (excel) => {
             const workbook = await excel.open({ path: file });
             const report = await excel.export(workbook, { format: format as ExportFormat, target: out });
             ctx.emitResult(report, `exported ${out} format=${report.format} losses=${report.losses.length}`);
