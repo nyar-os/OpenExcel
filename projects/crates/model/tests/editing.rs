@@ -1657,3 +1657,63 @@ fn range_delete_rejects_bad_requests() {
     assert_eq!(engine::summary(handle).expect("summary")["revision"], json!(1), "rejected batches never advance");
     engine::close(handle).expect("close");
 }
+
+#[test]
+fn formulas_evaluate_legacy_and_dotted_function_names() {
+    let created = engine::create(&json!({ "title": "FormulaAliases" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "B1", "rows": [[1], [2], [2], [3]] },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "formula": "=CONCATENATE(\"a\", \"b\", 1+1)" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A2", "formula": "=MODE.SNGL(B1:B4)" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A3", "formula": "=STDEV.S(B1:B4)" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A4", "formula": "=STDEV(B1:B4)" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A5", "formula": "=VAR.S(B1:B4)" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A6", "formula": "=VAR(B1:B4)" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A7", "formula": "=STDEV.P(B1:B4)" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A8", "formula": "=STDEVP(B1:B4)" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A9", "formula": "=VAR.P(B1:B4)" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A10", "formula": "=VARP(B1:B4)" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A11", "formula": "=RANK.EQ(2,B1:B4)" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A12", "formula": "=\"CONCATENATE(\"" },
+            ]
+        }),
+    )
+    .expect("alias formulas");
+    let read = |reference: &str| engine::cell(handle, &json!({ "sheet": "Sheet1", "address": reference })).expect(reference);
+    assert_eq!(read("A1")["value"], json!("ab2"), "CONCATENATE joins its arguments like CONCAT");
+    assert_eq!(read("A1")["computedState"], json!("computed"));
+    assert_eq!(read("A1")["formula"], json!("=CONCATENATE(\"a\", \"b\", 1+1)"), "the stored formula keeps its original spelling");
+    assert_eq!(read("A2")["value"], json!(2), "MODE.SNGL finds the single mode");
+    assert_eq!(read("A3")["value"], read("A4")["value"], "STDEV.S matches STDEV");
+    assert_eq!(read("A5")["value"], read("A6")["value"], "VAR.S matches VAR");
+    assert_eq!(read("A7")["value"], read("A8")["value"], "STDEV.P matches STDEVP");
+    assert_eq!(read("A9")["value"], read("A10")["value"], "VAR.P matches VARP");
+    assert_eq!(read("A11")["value"], json!(2), "RANK.EQ ranks like RANK");
+    assert_eq!(read("A12")["value"], json!("CONCATENATE("), "string literals are never rewritten");
+    engine::close(handle).expect("close");
+}
+
+#[test]
+fn unknown_and_broken_alias_formulas_stay_unsupported() {
+    let created = engine::create(&json!({ "title": "FormulaAliasErrors" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A1", "formula": "=CONCATENATE(1 2)" },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "A2", "formula": "=CONCATENATEX(1)" },
+            ]
+        }),
+    )
+    .expect("broken formulas are stored");
+    let read = |reference: &str| engine::cell(handle, &json!({ "sheet": "Sheet1", "address": reference })).expect(reference);
+    assert_eq!(read("A1")["value"], json!("#VALUE!"), "an unparseable call still fails like in the engine");
+    assert_eq!(read("A2")["computedState"], json!("unsupported"), "a near-miss name is not folded onto an alias");
+    assert_eq!(read("A2")["value"], json!("#NAME?"));
+    engine::close(handle).expect("close");
+}

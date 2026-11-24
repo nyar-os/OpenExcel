@@ -72,7 +72,7 @@ pub fn capabilities() -> Value {
         "formats": Value::Object(formats),
         "checks": Value::Object(checks),
         "formulas": {
-            "functions": eval::FUNCTIONS,
+            "functions": eval::supported_functions(),
             "unsupportedBehavior": "preserve-cached",
         },
         "renderers": {

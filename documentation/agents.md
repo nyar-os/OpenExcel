@@ -246,6 +246,7 @@ CLI usage failures add `open-excel.cli.*` codes such as `open-excel.cli.file-req
 - Structural edits (`row.*`, `column.*`) move merged ranges, frozen panes, row heights, column widths and formula references. Deleted reference targets become `#REF!`.
 - Defined names (`name.*`) are workbook-scope. They move with row and column inserts and deletes like merged ranges; a name whose whole range is deleted, or whose sheet is removed, is dropped. Names live in the native `.oexcel` project only and are not written to XLSX.
 - Unknown formula functions keep the cached source value and set `computedState: "unsupported"`; they never invent a result.
+- Legacy and dotted Excel spellings are folded onto engine functions before evaluation: `CONCATENATE`→`CONCAT`, `MODE.SNGL`→`MODE`, `STDEV.S`/`STDEV.P`→`STDEV`/`STDEVP`, `VAR.S`/`VAR.P`→`VAR`/`VARP`, `RANK.EQ`→`RANK`. The stored formula keeps its original text and `capabilities()` lists the folded names beside the engine functions.
 - `find` returns at most 500 hits and sets `truncated: true` when more exist.
 - `save` and most mutating commands need an explicit `--overwrite` (or `overwrite: true`) to replace an existing file. `export` has no overwrite option at all.
 - Close every session with `dispose()`; a disposed session rejects with `session/disposed`.
