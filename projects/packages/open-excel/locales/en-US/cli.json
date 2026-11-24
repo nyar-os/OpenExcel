@@ -86,5 +86,47 @@
             "columns": "Number of columns to keep frozen",
             "clear": "Remove the frozen pane"
         }
+    },
+    "open-excel": {
+        "cli": {
+            "out-required": "`--out <file>` is required",
+            "file-required": "a project file is required",
+            "ops-exclusive": "`--ops` cannot be combined with `--cell`, `--value` or `--formula`",
+            "ops-invalid": "`--ops` must be a JSON array of operations",
+            "cell-required": "`--cell <A1>` is required",
+            "value-required": "`--value` or `--formula` is required",
+            "range-required": "an A1 range such as `A1:C4` is required",
+            "column-required": "`--column <n|letter>` is required",
+            "target-required": "`--to <cell>` is required",
+            "axis-required": "`--axis <horizontal|vertical>` is required",
+            "find-required": "`--find <text>` is required",
+            "replace-required": "`--replace <text>` is required",
+            "limit-invalid": "`--limit <n>` must be a positive integer",
+            "font-size-invalid": "`--font-size` must be a positive number",
+            "align-invalid": "`--align` must be one of left, center, right, justify, distribute, fill",
+            "style-required": "at least one style option is required",
+            "layout-size-required": "`--width <units>` or `--height <pt>` is required",
+            "layout-width-invalid": "`--width` must be a number",
+            "row-required": "`--height` needs a positive `--row <n>`",
+            "layout-height-invalid": "`--height` must be a number",
+            "row-action-required": "exactly one of `--insert <row>` or `--delete <row>` is required",
+            "row-invalid": "`--insert`/`--delete` must be a one-based row between 1 and 1048576",
+            "count-invalid": "`--count` must be a positive integer",
+            "row-band-invalid": "rows {first}..{last} leave the sheet at row 1048576",
+            "column-action-required": "exactly one of `--insert <column>` or `--delete <column>` is required",
+            "column-invalid": "`--insert`/`--delete` must be a one-based column between 1 and 16384 or a letter",
+            "column-band-invalid": "columns {first}..{last} leave the sheet at column 16384",
+            "freeze-action-required": "exactly one of `--at <cell>`, `--rows <n> --columns <m>` or `--clear` is required",
+            "freeze-numbers-invalid": "`--rows` and `--columns` must both be non-negative integers",
+            "sheet-action-required": "exactly one of `--add`, `--rename`, `--remove`, `--duplicate`, `--move`, `--hide`, `--show` or `--very-hidden` is required",
+            "to-required": "`--rename` needs `--to <new>`",
+            "as-required": "`--duplicate` needs `--as <new>`",
+            "index-required": "`--move` needs a zero-based `--index <n>`",
+            "address-required": "an A1 cell address such as `B4` is required",
+            "query-required": "a non-empty search query is required",
+            "format-required": "`--format <name>` is required",
+            "format-invalid": "`--format` must be one of xlsx, xlsm, csv, tsv, json, html, pdf",
+            "gui-failed": "{message}"
+        }
     }
 }

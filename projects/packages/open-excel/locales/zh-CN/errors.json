@@ -1,0 +1,18 @@
+{
+    "session/disposed": "{message}",
+    "session/argument-invalid": "{message}",
+    "session/budget-exceeded": "{message}",
+    "workbook/not-found": "{message}",
+    "document/revision-conflict": "{message}",
+    "io/read": "{message}",
+    "io/write": "{message}",
+    "io/exists": "{message}",
+    "io/failure": "{message}",
+    "io/target-exists": "{message}",
+    "object/not-found": "{message}",
+    "object/unsupported": "{message}",
+    "format/unsupported": "{message}",
+    "format/invalid": "{message}",
+    "capability/not-implemented": "{message}",
+    "binding/failure": "{message}"
+}
