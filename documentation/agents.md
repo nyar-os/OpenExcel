@@ -113,9 +113,10 @@ const edited = await excel.edit(book, {
     ],
 });
 
-// Recalculate and assert the computed results, not just the formula text.
+// `edit` evaluates formulas when it commits, so a following `recalc` is
+// idempotent and reports `changed: 0`; the cell reads assert the computed results.
 const recalc = await excel.recalc(edited.workbook);
-assert.equal(recalc.changed, 2);
+assert.equal(recalc.changed, 0);
 assert.equal((await excel.cell(edited.workbook, { sheet: 'Sheet1', address: 'D2' })).value, 260);
 assert.equal((await excel.cell(edited.workbook, { sheet: 'Sheet1', address: 'D3' })).value, 200);
 
