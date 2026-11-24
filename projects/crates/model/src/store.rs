@@ -52,5 +52,5 @@ pub fn remove(handle: u64) -> bool {
 }
 
 fn not_found() -> ServiceError {
-    ServiceError::new("workbook/not-found", "no workbook is open for this handle")
+    ServiceError::workbook_not_found()
 }

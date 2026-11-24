@@ -57,7 +57,7 @@ fn create_edit_save_open_round_trip() {
     assert_eq!(saved["sheets"], json!(2));
     assert!(path.is_file());
     open_excel_workbook::close(handle).expect("close");
-    assert_eq!(open_excel_workbook::summary(handle).expect_err("closed handle").code, "workbook/not-found");
+    assert_eq!(open_excel_workbook::summary(handle).expect_err("closed handle").code(), "workbook/not-found");
 
     let opened = open_excel_workbook::open(&path).expect("open");
     let reopened = opened["handle"].as_u64().expect("handle");
@@ -151,7 +151,7 @@ fn revision_conflicts_are_reported() {
         &json!({ "expectedRevision": 0, "operations": [{ "op": "sheet.add", "name": "Third" }] }),
     )
     .expect_err("conflict");
-    assert_eq!(error.code, "document/revision-conflict");
+    assert_eq!(error.code(), "document/revision-conflict");
     open_excel_workbook::close(handle).expect("close");
 }
 
@@ -218,7 +218,7 @@ fn svg_render_exposes_the_grid() {
     assert!(svg.starts_with("<svg"));
     assert!(svg.contains("&lt;&amp;&gt;"));
     let unsupported = open_excel_workbook::render(handle, &json!({ "format": "png" })).expect_err("png");
-    assert_eq!(unsupported.code, "format/unsupported");
+    assert_eq!(unsupported.code(), "format/unsupported");
     open_excel_workbook::close(handle).expect("close");
 }
 
@@ -348,14 +348,14 @@ fn format_copy_paints_the_source_style_over_a_range() {
         &json!({ "operations": [{ "op": "format.copy", "sheet": "Sheet1", "source": "Z9", "target": "A1" }] }),
     )
     .expect_err("missing source cell");
-    assert_eq!(missing.code, "session/argument-invalid");
+    assert_eq!(missing.code(), "session/argument-invalid");
 
     let wide = open_excel_workbook::edit(
         handle,
         &json!({ "operations": [{ "op": "format.copy", "sheet": "Sheet1", "source": "A1:B2", "target": "A1" }] }),
     )
     .expect_err("source must be one cell");
-    assert_eq!(wide.code, "session/argument-invalid");
+    assert_eq!(wide.code(), "session/argument-invalid");
 
     open_excel_workbook::close(handle).expect("close");
 }
@@ -397,13 +397,13 @@ fn format_clear_removes_styles_but_keeps_values() {
         &json!({ "operations": [{ "op": "format.clear", "sheet": "Missing", "range": "A1" }] }),
     )
     .expect_err("unknown sheet");
-    assert_eq!(missing_sheet.code, "object/not-found");
+    assert_eq!(missing_sheet.code(), "object/not-found");
     let bad_range = open_excel_workbook::edit(
         handle,
         &json!({ "operations": [{ "op": "format.clear", "sheet": "Sheet1", "range": "nope" }] }),
     )
     .expect_err("invalid range");
-    assert_eq!(bad_range.code, "session/argument-invalid");
+    assert_eq!(bad_range.code(), "session/argument-invalid");
 
     open_excel_workbook::close(handle).expect("close");
 }
@@ -437,7 +437,7 @@ fn range_append_writes_below_the_last_populated_row() {
         &json!({ "operations": [{ "op": "range.append", "sheet": "Sheet1" }] }),
     )
     .expect_err("rows are required");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     open_excel_workbook::close(handle).expect("close");
 }
@@ -481,7 +481,7 @@ fn range_clear_contents_keeps_styles_and_formulas_elsewhere() {
         &json!({ "operations": [{ "op": "range.clearContents", "sheet": "Sheet1", "range": "nope" }] }),
     )
     .expect_err("invalid range");
-    assert_eq!(bad_range.code, "session/argument-invalid");
+    assert_eq!(bad_range.code(), "session/argument-invalid");
 
     open_excel_workbook::close(handle).expect("close");
 }
@@ -524,7 +524,7 @@ fn duplicate_and_move_keep_sheet_names_unique() {
         &json!({ "operations": [{ "op": "sheet.duplicate", "sheet": "Notes", "name": "Sheet1" }] }),
     )
     .expect_err("duplicate name");
-    assert_eq!(conflict.code, "session/argument-invalid");
+    assert_eq!(conflict.code(), "session/argument-invalid");
     open_excel_workbook::close(handle).expect("close");
 }
 
@@ -710,13 +710,13 @@ fn merge_freeze_visibility_and_replace_text_edits_apply() {
         &json!({ "operations": [{ "op": "merge.set", "sheet": "Sheet1", "start": "C2", "end": "D3", "merge": true }] }),
     )
     .expect_err("overlap");
-    assert_eq!(overlap.code, "session/argument-invalid");
+    assert_eq!(overlap.code(), "session/argument-invalid");
     let outside = open_excel_workbook::edit(
         handle,
         &json!({ "operations": [{ "op": "merge.set", "sheet": "Sheet1", "start": "A1", "end": "XFE1", "merge": true }] }),
     )
     .expect_err("outside");
-    assert_eq!(outside.code, "session/argument-invalid");
+    assert_eq!(outside.code(), "session/argument-invalid");
 
     open_excel_workbook::edit(
         handle,
@@ -775,7 +775,7 @@ fn replace_text_scans_the_used_rectangle_and_honours_limit() {
         &json!({ "operations": [{ "op": "cell.replaceText", "sheet": "Sheet1", "find": "alpha", "limit": 0 }] }),
     )
     .expect_err("zero limit");
-    assert_eq!(zero.code, "session/argument-invalid");
+    assert_eq!(zero.code(), "session/argument-invalid");
 
     let empty = open_excel_workbook::create(&json!({ "title": "Empty" })).expect("create");
     let empty_handle = empty["handle"].as_u64().expect("handle");
@@ -784,7 +784,7 @@ fn replace_text_scans_the_used_rectangle_and_honours_limit() {
         &json!({ "operations": [{ "op": "cell.replaceText", "sheet": "Sheet1", "find": "x", "replace": "y" }] }),
     )
     .expect_err("empty sheet");
-    assert_eq!(missing.code, "session/argument-invalid");
+    assert_eq!(missing.code(), "session/argument-invalid");
     open_excel_workbook::close(empty_handle).expect("close");
 
     open_excel_workbook::close(handle).expect("close");
@@ -833,7 +833,7 @@ fn find_reports_character_offsets_for_values_and_formulas() {
     assert_eq!((formula_hits[0]["start"].clone(), formula_hits[0]["end"].clone()), (json!(1), json!(5)));
 
     let missing = open_excel_workbook::find(handle, &json!({ "query": "find", "sheet": "Nope" })).expect_err("missing sheet");
-    assert_eq!(missing.code, "object/not-found");
+    assert_eq!(missing.code(), "object/not-found");
     open_excel_workbook::close(handle).expect("close");
 }
 
@@ -900,7 +900,7 @@ fn range_sort_orders_whole_rows_and_rejects_merges() {
         &json!({ "operations": [{ "op": "range.sort", "sheet": "Sheet1", "range": "A1:C4", "column": 4 }] }),
     )
     .expect_err("column outside the range");
-    assert_eq!(outside.code, "session/argument-invalid");
+    assert_eq!(outside.code(), "session/argument-invalid");
 
     open_excel_workbook::edit(
         handle,
@@ -912,7 +912,7 @@ fn range_sort_orders_whole_rows_and_rejects_merges() {
         &json!({ "operations": [{ "op": "range.sort", "sheet": "Sheet1", "range": "E1:F3", "column": 1 }] }),
     )
     .expect_err("merged range");
-    assert_eq!(merged.code, "session/argument-invalid");
+    assert_eq!(merged.code(), "session/argument-invalid");
     open_excel_workbook::close(handle).expect("close");
 }
 
@@ -963,7 +963,7 @@ fn range_sort_orders_by_several_keys() {
         json!({ "op": "range.sort", "sheet": "Sheet1", "range": "A1:C5", "keys": [{ "column": 4 }] }),
     ] {
         let error = open_excel_workbook::edit(handle, &json!({ "operations": [operation] })).expect_err("bad keys");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     assert_eq!(
         open_excel_workbook::summary(handle).expect("summary")["revision"],
@@ -1033,14 +1033,14 @@ fn fill_series_writes_linear_numbers_and_rejects_bad_ranges() {
         json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "A1:A3", "step": "two" }] }),
     ] {
         let error = open_excel_workbook::edit(handle, &request).expect_err("invalid series");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     let missing = open_excel_workbook::edit(
         handle,
         &json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Nope", "range": "A1:A3", "start": 1 }] }),
     )
     .expect_err("missing sheet");
-    assert_eq!(missing.code, "object/not-found");
+    assert_eq!(missing.code(), "object/not-found");
 
     open_excel_workbook::edit(
         handle,
@@ -1052,7 +1052,7 @@ fn fill_series_writes_linear_numbers_and_rejects_bad_ranges() {
         &json!({ "operations": [{ "op": "range.fillSeries", "sheet": "Sheet1", "range": "J1:J5", "start": 1 }] }),
     )
     .expect_err("merged range");
-    assert_eq!(merged.code, "session/argument-invalid");
+    assert_eq!(merged.code(), "session/argument-invalid");
     open_excel_workbook::close(handle).expect("close");
 }
 
@@ -1104,19 +1104,19 @@ fn transpose_moves_cells_into_the_target_rectangle() {
         &json!({ "operations": [{ "op": "range.transpose", "sheet": "Sheet1", "range": "A1:B2" }] }),
     )
     .expect_err("missing target");
-    assert_eq!(missing.code, "session/argument-invalid");
+    assert_eq!(missing.code(), "session/argument-invalid");
     let overlap = open_excel_workbook::edit(
         handle,
         &json!({ "operations": [{ "op": "range.transpose", "sheet": "Sheet1", "range": "A1:C2", "target": "B1" }] }),
     )
     .expect_err("overlapping target");
-    assert_eq!(overlap.code, "session/argument-invalid");
+    assert_eq!(overlap.code(), "session/argument-invalid");
     let outside = open_excel_workbook::edit(
         handle,
         &json!({ "operations": [{ "op": "range.transpose", "sheet": "Sheet1", "range": "A1:B1", "target": "A1048576" }] }),
     )
     .expect_err("grid");
-    assert_eq!(outside.code, "session/argument-invalid");
+    assert_eq!(outside.code(), "session/argument-invalid");
 
     open_excel_workbook::edit(
         handle,
@@ -1235,7 +1235,7 @@ fn range_copy_can_write_into_another_sheet() {
         json!({ "op": "range.copy", "sheet": "Sheet1", "range": "A1:B2", "target": "A1048576", "targetSheet": "Notes" }),
     ] {
         let error = open_excel_workbook::edit(handle, &json!({ "operations": [operation] })).expect_err("bad target");
-        assert!(error.code == "object/not-found" || error.code == "session/argument-invalid");
+        assert!(error.code() == "object/not-found" || error.code() == "session/argument-invalid");
     }
     assert_eq!(
         open_excel_workbook::summary(handle).expect("summary")["revision"],
@@ -1253,7 +1253,7 @@ fn range_copy_can_write_into_another_sheet() {
         &json!({ "operations": [{ "op": "range.copy", "sheet": "Sheet1", "range": "A1:B1", "target": "G1", "targetSheet": "Notes" }] }),
     )
     .expect_err("merged target");
-    assert_eq!(merged.code, "session/argument-invalid");
+    assert_eq!(merged.code(), "session/argument-invalid");
     open_excel_workbook::close(handle).expect("close");
 }
 
@@ -1308,7 +1308,7 @@ fn range_swap_can_exchange_cells_with_another_sheet() {
         json!({ "op": "range.swap", "sheet": "Sheet1", "range": "A1:B2", "target": "A1048576", "targetSheet": "Notes" }),
     ] {
         let error = open_excel_workbook::edit(handle, &json!({ "operations": [operation] })).expect_err("bad target");
-        assert!(error.code == "object/not-found" || error.code == "session/argument-invalid");
+        assert!(error.code() == "object/not-found" || error.code() == "session/argument-invalid");
     }
     assert_eq!(
         open_excel_workbook::summary(handle).expect("summary")["revision"],
@@ -1326,7 +1326,7 @@ fn range_swap_can_exchange_cells_with_another_sheet() {
         &json!({ "operations": [{ "op": "range.swap", "sheet": "Sheet1", "range": "A1:B1", "target": "G1", "targetSheet": "Notes" }] }),
     )
     .expect_err("merged target");
-    assert_eq!(merged.code, "session/argument-invalid");
+    assert_eq!(merged.code(), "session/argument-invalid");
     open_excel_workbook::close(handle).expect("close");
 }
 
@@ -1375,7 +1375,7 @@ fn range_move_can_write_into_another_sheet() {
         json!({ "op": "range.move", "sheet": "Sheet1", "range": "A1:B2", "target": "A1048576", "targetSheet": "Notes" }),
     ] {
         let error = open_excel_workbook::edit(handle, &json!({ "operations": [operation] })).expect_err("bad target");
-        assert!(error.code == "object/not-found" || error.code == "session/argument-invalid");
+        assert!(error.code() == "object/not-found" || error.code() == "session/argument-invalid");
     }
     assert_eq!(
         open_excel_workbook::summary(handle).expect("summary")["revision"],
@@ -1393,7 +1393,7 @@ fn range_move_can_write_into_another_sheet() {
         &json!({ "operations": [{ "op": "range.move", "sheet": "Sheet1", "range": "A1:B1", "target": "G1", "targetSheet": "Notes" }] }),
     )
     .expect_err("merged target");
-    assert_eq!(merged.code, "session/argument-invalid");
+    assert_eq!(merged.code(), "session/argument-invalid");
     open_excel_workbook::close(handle).expect("close");
 }
 
@@ -1477,7 +1477,7 @@ fn range_copy_rejects_out_of_grid_and_merged_ranges_without_changing_the_documen
         json!({ "operations": [{ "op": "range.copy", "sheet": "Sheet1", "range": "A1:B1" }] }),
     ] {
         let error = open_excel_workbook::edit(handle, &request).expect_err("invalid copy");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
         assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], revision);
     }
 
@@ -1491,7 +1491,7 @@ fn range_copy_rejects_out_of_grid_and_merged_ranges_without_changing_the_documen
         }),
     )
     .expect_err("a failing copy rolls back the batch");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
     let project = project_of(handle);
     assert_eq!(project.sheet("Sheet1").expect("sheet").cell(1, 1).expect("A1").value, CellValue::number(1.0));
     assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], revision);
@@ -1613,7 +1613,7 @@ fn range_move_rejects_out_of_grid_and_merged_ranges_without_changing_the_documen
         json!({ "operations": [{ "op": "range.move", "sheet": "Sheet1", "range": "A1:B1" }] }),
     ] {
         let error = open_excel_workbook::edit(handle, &request).expect_err("invalid move");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
         assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], revision);
     }
 
@@ -1734,7 +1734,7 @@ fn range_swap_rejects_out_of_grid_and_merged_ranges_without_changing_the_documen
         json!({ "operations": [{ "op": "range.swap", "sheet": "Sheet1", "range": "A1:B1" }] }),
     ] {
         let error = open_excel_workbook::edit(handle, &request).expect_err("invalid swap");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
         assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], revision);
     }
 
@@ -1829,7 +1829,7 @@ fn range_flip_rejects_invalid_axis_out_of_grid_and_merged_ranges() {
         json!({ "operations": [{ "op": "range.flip", "sheet": "Sheet1", "range": "C1:D1", "axis": "horizontal" }] }),
     ] {
         let error = open_excel_workbook::edit(handle, &request).expect_err("invalid flip");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
         assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], revision);
     }
 
@@ -2028,7 +2028,7 @@ fn sheet_freeze_rejects_invalid_boundaries_without_changing_the_document() {
         }),
     ] {
         let error = open_excel_workbook::edit(handle, &request).expect_err("invalid freeze");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
         assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], revision);
     }
 
@@ -2042,7 +2042,7 @@ fn sheet_freeze_rejects_invalid_boundaries_without_changing_the_document() {
         }),
     )
     .expect_err("a failing operation rolls back the batch");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
     let project = project_of(handle);
     assert_eq!(project.sheet("Sheet1").expect("sheet").cell(1, 1).expect("A1").value, CellValue::number(1.0));
     assert_eq!(project.sheet("Sheet1").expect("sheet").freeze, None);
@@ -2098,7 +2098,7 @@ fn sheet_autofilter_survives_xlsx_and_can_be_cleared() {
             &json!({ "operations": [{ "op": "sheet.setAutoFilter", "sheet": "Sheet1", "range": range }] }),
         )
         .expect_err("invalid autofilter range");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
         assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], revision);
     }
 
@@ -2173,7 +2173,7 @@ fn hiding_the_last_visible_sheet_is_rejected() {
             ] }),
         )
         .expect_err("the last visible sheet cannot be hidden");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
         assert_eq!(open_excel_workbook::summary(handle).expect("summary")["revision"], revision);
     }
     let project = project_of(handle);
@@ -2187,7 +2187,7 @@ fn hiding_the_last_visible_sheet_is_rejected() {
         &json!({ "operations": [{ "op": "sheet.setVisibility", "sheet": "Sheet1", "visibility": "hidden" }] }),
     )
     .expect_err("a single sheet cannot be hidden");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
     assert_eq!(project_of(single_handle).sheet("Sheet1").expect("sheet").visibility, SheetVisibility::Visible);
 
     open_excel_workbook::close(handle).expect("close");

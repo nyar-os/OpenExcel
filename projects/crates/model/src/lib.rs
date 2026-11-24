@@ -113,10 +113,7 @@ pub fn create(request: &Value) -> Result<Value, ServiceError> {
     if let Some(template) = request.get("template").and_then(Value::as_str).filter(|template| !template.trim().is_empty())
         && !template.eq_ignore_ascii_case("blank")
     {
-        return Err(ServiceError::new(
-            "object/unsupported",
-            format!("template `{template}` is not available; this build starts from `blank`"),
-        ));
+        return Err(ServiceError::template_unavailable(template));
     }
     let mut project = Project::blank(title);
     eval::recalculate(&mut project);
@@ -126,7 +123,7 @@ pub fn create(request: &Value) -> Result<Value, ServiceError> {
 
 /// Opens a workbook project or a supported spreadsheet file.
 pub fn open(path: &Path) -> Result<Value, ServiceError> {
-    let bytes = fs::read(path).map_err(|error| ServiceError::io(format!("failed to read {}: {error}", path.display())))?;
+    let bytes = fs::read(path).map_err(|error| ServiceError::io_read(path, error))?;
     let extension = path.extension().and_then(|extension| extension.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
     let title = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Workbook").to_owned();
     let mut project = match extension.as_str() {
@@ -162,7 +159,7 @@ fn read_project_json(bytes: &[u8]) -> Result<Project, ServiceError> {
 pub fn save(handle: u64, path: &Path, overwrite: bool) -> Result<Value, ServiceError> {
     let (project, revision) = store::with(handle, |entry| (entry.project.clone(), entry.revision))?;
     let mut bytes = serde_json::to_vec_pretty(&project)
-        .map_err(|error| ServiceError::new("format/invalid", format!("the project cannot be serialized: {error}")))?;
+        .map_err(|error| ServiceError::invalid("oexcel", format!("the project cannot be serialized: {error}")))?;
     bytes.push(b'\n');
     write_file(path, &bytes, overwrite)?;
     store::with_mut(handle, |entry| entry.path = Some(path.to_path_buf()))?;
@@ -251,7 +248,7 @@ pub fn export(handle: u64, format: &str, target: &Path, overwrite: bool) -> Resu
             (bytes, Vec::new(), true)
         }
         "xlsm" => return Err(ServiceError::unsupported(&format)),
-        other => return Err(ServiceError::new("format/unsupported", format!("`{other}` is not an export target"))),
+        other => return Err(ServiceError::unsupported(other)),
     };
     write_file(target, &bytes, overwrite)?;
     Ok(json!({
@@ -264,7 +261,7 @@ pub fn export(handle: u64, format: &str, target: &Path, overwrite: bool) -> Resu
 }
 
 fn primary_sheet(project: &Project) -> Result<&Sheet, ServiceError> {
-    project.primary_sheet().ok_or_else(|| ServiceError::new("object/not-found", "the workbook has no sheet"))
+    project.primary_sheet().ok_or_else(ServiceError::no_sheet)
 }
 
 fn skipped_sheets(project: &Project, code: &str) -> Vec<Value> {
@@ -627,10 +624,7 @@ pub fn edit(handle: u64, request: &Value) -> Result<Value, ServiceError> {
         if let Some(expected) = request.get("expectedRevision").and_then(Value::as_u64)
             && expected != entry.revision
         {
-            return Err(ServiceError::new(
-                "document/revision-conflict",
-                format!("expected revision {expected} but the workbook is at revision {}", entry.revision),
-            ));
+            return Err(ServiceError::revision_conflict(expected, entry.revision));
         }
         let operations = request
             .get("operations")
@@ -836,7 +830,7 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             let before = project.names.len();
             project.names.retain(|named| !named.name.eq_ignore_ascii_case(name));
             if project.names.len() == before {
-                return Err(ServiceError::new("object/not-found", format!("defined name `{name}` does not exist")));
+                return Err(ServiceError::not_found("defined name", name));
             }
             0
         }
@@ -862,7 +856,7 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                 .names
                 .iter()
                 .position(|named| named.name.eq_ignore_ascii_case(name))
-                .ok_or_else(|| ServiceError::new("object/not-found", format!("defined name `{name}` does not exist")))?;
+                .ok_or_else(|| ServiceError::not_found("defined name", name))?;
             if project.names.iter().enumerate().any(|(other, named)| other != index && named.name.eq_ignore_ascii_case(renamed)) {
                 return Err(ServiceError::argument(format!("defined name `{renamed}` already exists")));
             }
@@ -1672,7 +1666,7 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             structure::swap_columns(project, operation)?;
             0
         }
-        other => return Err(ServiceError::new("object/unsupported", format!("edit operation `{other}` is not supported"))),
+        other => return Err(ServiceError::operation_unsupported(other)),
     };
     Ok(replacements)
 }
@@ -2980,7 +2974,7 @@ pub(crate) fn missing_sheet(key: &str) -> ServiceError {
         ServiceError::argument("an operation needs a `sheet` name or id")
     }
     else {
-        ServiceError::new("object/not-found", format!("sheet `{key}` does not exist"))
+        ServiceError::not_found("sheet", key)
     }
 }
 
@@ -3038,14 +3032,13 @@ pub fn close(handle: u64) -> Result<(), ServiceError> {
 
 fn write_file(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), ServiceError> {
     if path.exists() && !overwrite {
-        return Err(ServiceError::new("io/target-exists", format!("{} already exists; pass `--overwrite`", path.display())));
+        return Err(ServiceError::io_exists(path));
     }
     let options = PublishOptions {
         overwrite: if overwrite { OverwritePolicy::Replace } else { OverwritePolicy::RefuseExisting },
         ..PublishOptions::default()
     };
-    publish_bytes_with_options(publish_target(path), bytes, options)
-        .map_err(|error| ServiceError::io(format!("failed to write {}: {error}", path.display())))
+    publish_bytes_with_options(publish_target(path), bytes, options).map_err(|error| ServiceError::io_write(path, error.to_string()))
 }
 
 /// Keeps a bare file name anchored to the working directory so the publisher

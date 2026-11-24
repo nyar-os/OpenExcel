@@ -133,7 +133,7 @@ fn invalid_layout_values_are_rejected() {
     ];
     for request in requests {
         let error = engine::edit(handle, &request).expect_err("invalid layout");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     engine::close(handle).expect("close");
 }
@@ -404,7 +404,7 @@ fn structural_edits_reject_out_of_range_requests() {
     ];
     for request in requests {
         let error = engine::edit(handle, &request).expect_err("out-of-range structural edit");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     engine::close(handle).expect("close");
 }
@@ -437,7 +437,7 @@ fn a_failing_operation_leaves_the_workbook_unchanged() {
         }),
     )
     .expect_err("second operation fails");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
     assert_eq!(engine::summary(handle).expect("summary")["revision"], json!(1));
 
     engine::save(handle, &project_path, true).expect("save");
@@ -502,7 +502,7 @@ fn cell_clear_removes_values_and_can_keep_style() {
 
     let error = engine::edit(handle, &json!({ "operations": [{ "op": "cell.clear", "sheet": "Sheet1", "reference": "not-a-cell" }] }))
         .expect_err("bad reference");
-    assert_eq!(error.code, "session/argument-invalid");
+    assert_eq!(error.code(), "session/argument-invalid");
 
     engine::save(handle, &project_path, true).expect("save");
     engine::close(handle).expect("close");
@@ -599,7 +599,7 @@ fn format_number_rejects_invalid_requests() {
     ];
     for request in requests {
         let error = engine::edit(handle, &request).expect_err("invalid number format");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     engine::close(handle).expect("close");
 }
@@ -668,7 +668,7 @@ fn named_ranges_round_trip_and_redefine_case_insensitively() {
     assert_eq!(engine::summary(read_handle).expect("summary")["names"].as_array().expect("names").len(), 1);
     let error =
         engine::edit(read_handle, &json!({ "operations": [{ "op": "name.remove", "name": "Tax" }] })).expect_err("remove twice");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
     engine::close(read_handle).expect("close");
     let _ = fs::remove_file(project_path);
 }
@@ -715,7 +715,7 @@ fn text_case_rewrites_text_cells_and_skips_formulas_and_numbers() {
         json!({ "operations": [{ "op": "range.setTextCase", "sheet": "Sheet1", "range": "A1:A2" }] }),
     ] {
         let error = engine::edit(handle, &request).expect_err("invalid case request");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     engine::close(handle).expect("close");
 }
@@ -762,7 +762,7 @@ fn trim_text_strips_and_collapses_whitespace() {
         json!({ "operations": [{ "op": "range.trimText", "sheet": "Sheet1", "range": "A1:A2", "collapse": "yes" }] }),
     ] {
         let error = engine::edit(handle, &request).expect_err("invalid trim request");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     engine::close(handle).expect("close");
 }
@@ -793,17 +793,17 @@ fn defined_names_can_be_renamed_case_insensitively() {
 
     let taken = engine::edit(handle, &json!({ "operations": [{ "op": "name.rename", "name": "Revenue", "to": "TAX" }] }))
         .expect_err("the target already exists");
-    assert_eq!(taken.code, "session/argument-invalid");
+    assert_eq!(taken.code(), "session/argument-invalid");
     let missing = engine::edit(handle, &json!({ "operations": [{ "op": "name.rename", "name": "Missing", "to": "Other" }] }))
         .expect_err("unknown source name");
-    assert_eq!(missing.code, "object/not-found");
+    assert_eq!(missing.code(), "object/not-found");
     for request in [
         json!({ "operations": [{ "op": "name.rename", "name": "Revenue", "to": "A1" }] }),
         json!({ "operations": [{ "op": "name.rename", "name": "Revenue", "to": " " }] }),
         json!({ "operations": [{ "op": "name.rename", "name": "Revenue" }] }),
     ] {
         let error = engine::edit(handle, &request).expect_err("invalid rename request");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     engine::close(handle).expect("close");
 }
@@ -870,11 +870,11 @@ fn name_operations_reject_invalid_requests() {
     ];
     for request in argument_requests {
         let error = engine::edit(handle, &request).expect_err("invalid name request");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     let error = engine::edit(handle, &json!({ "operations": [{ "op": "name.define", "name": "Data", "sheet": "Missing", "range": "A1:B2" }] }))
         .expect_err("missing sheet");
-    assert_eq!(error.code, "object/not-found");
+    assert_eq!(error.code(), "object/not-found");
     engine::close(handle).expect("close");
 }
 
@@ -956,7 +956,7 @@ fn growth_series_fill_rejects_invalid_ratios() {
     ];
     for request in requests {
         let error = engine::edit(handle, &request).expect_err("invalid growth request");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     engine::close(handle).expect("close");
 }
@@ -972,7 +972,7 @@ fn date_series_fill_rejects_invalid_kind_requests() {
     ];
     for request in requests {
         let error = engine::edit(handle, &request).expect_err("invalid series kind");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     engine::close(handle).expect("close");
 }
@@ -1005,7 +1005,7 @@ fn workbook_title_edits_show_up_in_summary_and_project() {
         json!({ "operations": [{ "op": "workbook.setTitle", "title": 7 }] }),
     ] {
         let error = engine::edit(handle, &request).expect_err("invalid title");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     assert_eq!(engine::summary(handle).expect("summary")["title"], json!("Quarterly plan"));
     engine::close(handle).expect("close");
@@ -1091,7 +1091,7 @@ fn remove_duplicates_rejects_bad_keys_and_merged_ranges() {
         json!({ "operations": [{ "op": "range.removeDuplicates", "sheet": "Sheet1", "range": "not-a-range" }] }),
     ] {
         let error = engine::edit(handle, &request).expect_err("invalid dedup request");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     assert_eq!(engine::summary(handle).expect("summary")["revision"].as_u64().expect("revision"), revision);
     engine::close(handle).expect("close");
@@ -1139,12 +1139,12 @@ fn remove_empty_rows_compacts_only_rows_without_cells() {
         json!({ "operations": [{ "op": "range.removeEmptyRows", "sheet": "Sheet1", "range": "D1" }] }),
     ] {
         let error = engine::edit(handle, &request).expect_err("invalid empty-row request");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     let missing =
         engine::edit(handle, &json!({ "operations": [{ "op": "range.removeEmptyRows", "sheet": "Missing", "range": "A1:B2" }] }))
             .expect_err("unknown sheet");
-    assert_eq!(missing.code, "object/not-found");
+    assert_eq!(missing.code(), "object/not-found");
     assert_eq!(engine::summary(handle).expect("summary").get("revision").cloned().unwrap_or_default(), revision);
     engine::close(handle).expect("close");
     let _ = fs::remove_file(project_path);
@@ -1193,7 +1193,7 @@ fn remove_empty_columns_compacts_only_columns_without_cells() {
         json!({ "operations": [{ "op": "range.removeEmptyColumns", "sheet": "Missing", "range": "A1:B2" }] }),
     ] {
         let error = engine::edit(handle, &request).expect_err("invalid empty-column request");
-        assert_ne!(error.code, "");
+        assert_ne!(error.code(), "");
     }
     assert_eq!(engine::summary(handle).expect("summary").get("revision").cloned().unwrap_or_default(), revision);
     engine::close(handle).expect("close");
@@ -1325,7 +1325,7 @@ fn fill_rejects_bad_directions_and_merged_ranges_but_single_lines_are_no_ops() {
         json!({ "operations": [{ "op": "range.fill", "sheet": "Sheet1", "range": "nope", "direction": "down" }] }),
     ] {
         let error = engine::edit(handle, &request).expect_err("invalid fill request");
-        assert_eq!(error.code, "session/argument-invalid");
+        assert_eq!(error.code(), "session/argument-invalid");
     }
     assert_eq!(engine::summary(handle).expect("summary")["revision"].as_u64().expect("revision"), revision);
 
@@ -1456,7 +1456,7 @@ fn line_swap_rejects_bad_lines_unknown_sheets_and_straddling_merges() {
         json!({ "operations": [{ "op": "column.swap", "sheet": "Sheet1", "column": "C", "other": "E" }] }),
     ] {
         let error = engine::edit(handle, &request).expect_err("invalid swap request");
-        assert_eq!(error.code, if request["operations"][0]["sheet"] == json!("Nope") { "object/not-found" } else { "session/argument-invalid" });
+        assert_eq!(error.code(), if request["operations"][0]["sheet"] == json!("Nope") { "object/not-found" } else { "session/argument-invalid" });
     }
     assert_eq!(engine::summary(handle).expect("summary")["revision"], json!(1), "rejected batches never advance");
 
@@ -1566,7 +1566,7 @@ fn range_round_reports_changed_count_and_rejects_bad_requests() {
         json!({ "operations": [{ "op": "range.round", "sheet": "Nope", "range": "A1:A2" }] }),
     ] {
         let error = engine::edit(handle, &request).expect_err("invalid round request");
-        assert_eq!(error.code, if request["operations"][0]["sheet"] == json!("Nope") { "object/not-found" } else { "session/argument-invalid" });
+        assert_eq!(error.code(), if request["operations"][0]["sheet"] == json!("Nope") { "object/not-found" } else { "session/argument-invalid" });
     }
     engine::close(handle).expect("close");
 }
@@ -1588,7 +1588,7 @@ fn range_insert_rejects_bad_requests() {
         json!({ "operations": [{ "op": "range.insert", "sheet": "Sheet1", "range": "A2:A2", "shift": "down" }] }),
     ] {
         let error = engine::edit(handle, &request).expect_err("invalid insert request");
-        assert_eq!(error.code, if request["operations"][0]["sheet"] == json!("Nope") { "object/not-found" } else { "session/argument-invalid" });
+        assert_eq!(error.code(), if request["operations"][0]["sheet"] == json!("Nope") { "object/not-found" } else { "session/argument-invalid" });
     }
     assert_eq!(engine::summary(handle).expect("summary")["revision"], json!(1), "rejected batches never advance");
     engine::close(handle).expect("close");
@@ -1652,7 +1652,7 @@ fn range_delete_rejects_bad_requests() {
         json!({ "operations": [{ "op": "range.delete", "sheet": "Nope", "range": "A2:A3", "shift": "up" }] }),
     ] {
         let error = engine::edit(handle, &request).expect_err("invalid delete request");
-        assert_eq!(error.code, if request["operations"][0]["sheet"] == json!("Nope") { "object/not-found" } else { "session/argument-invalid" });
+        assert_eq!(error.code(), if request["operations"][0]["sheet"] == json!("Nope") { "object/not-found" } else { "session/argument-invalid" });
     }
     assert_eq!(engine::summary(handle).expect("summary")["revision"], json!(1), "rejected batches never advance");
     engine::close(handle).expect("close");

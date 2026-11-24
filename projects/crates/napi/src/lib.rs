@@ -29,11 +29,15 @@ use wae::{
 };
 
 fn fail(error: ServiceError) -> Error {
-    Error::new(format!("{}: {}", error.code, error.message))
+    let mut mapped = Error::new(error.message().to_owned()).code(error.code().to_owned());
+    if !error.params().is_null() {
+        mapped = mapped.detail(json!({ "params": error.params() }));
+    }
+    mapped
 }
 
 fn argument(ctx: &CallContext, index: usize) -> Result<JsValue> {
-    ctx.args().get(index).copied().ok_or_else(|| Error::new("session/argument-invalid: a required argument is missing"))
+    ctx.args().get(index).copied().ok_or_else(|| Error::new("a required argument is missing").code("session/argument-invalid"))
 }
 
 fn text(ctx: &CallContext, index: usize) -> Result<String> {
@@ -42,7 +46,8 @@ fn text(ctx: &CallContext, index: usize) -> Result<String> {
 
 fn handle(ctx: &CallContext, index: usize) -> Result<u64> {
     let raw = argument(ctx, index)?.as_i64()?;
-    u64::try_from(raw).map_err(|_| Error::new("session/argument-invalid: the workbook handle must be a non-negative integer"))
+    u64::try_from(raw)
+        .map_err(|_| Error::new("the workbook handle must be a non-negative integer").code("session/argument-invalid"))
 }
 
 fn respond(ctx: &CallContext, value: &Value) -> Result<JsValue> {
@@ -51,7 +56,7 @@ fn respond(ctx: &CallContext, value: &Value) -> Result<JsValue> {
 }
 
 fn parse_json(raw: &str) -> Result<Value> {
-    serde_json::from_str(raw).map_err(|error| Error::new(format!("session/argument-invalid: {error}")))
+    serde_json::from_str(raw).map_err(|error| Error::new(error.to_string()).code("session/argument-invalid"))
 }
 
 /// Library version of the native binding.
@@ -108,7 +113,7 @@ fn workbook_inspect(ctx: CallContext) -> Result<JsValue> {
                 parsed
                     .as_array()
                     .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
-                    .ok_or_else(|| Error::new("session/argument-invalid: `checks` must be a JSON array"))
+                    .ok_or_else(|| Error::new("`checks` must be a JSON array").code("session/argument-invalid"))
             })?;
             Some(names)
         }
@@ -255,7 +260,7 @@ impl IpcHandler for WorkbookIpcHandler {
             "workbook.open" => {
                 let path = value.get("path").and_then(Value::as_str).unwrap_or("").trim().to_string();
                 if path.is_empty() {
-                    return failure(id, "openError", "an open request needs a project path".to_string());
+                    return failure(id, "openError", argument_failure("an open request needs a project path"));
                 }
                 match call_open(&path) {
                     Ok(result) => reply(id, "openResult", result),
@@ -265,7 +270,7 @@ impl IpcHandler for WorkbookIpcHandler {
             "workbook.save" => {
                 let path = value.get("path").and_then(Value::as_str).unwrap_or("").trim().to_string();
                 if path.is_empty() {
-                    return failure(id, "saveError", "a save request needs a project path".to_string());
+                    return failure(id, "saveError", argument_failure("a save request needs a project path"));
                 }
                 let overwrite = value.get("overwrite").and_then(Value::as_bool).unwrap_or(true);
                 match call_save(handle_of(&value), &path, overwrite) {
@@ -330,7 +335,7 @@ impl IpcHandler for WorkbookIpcHandler {
                 let format = value.get("format").and_then(Value::as_str).unwrap_or("").trim().to_string();
                 let target = value.get("target").and_then(Value::as_str).unwrap_or("").trim().to_string();
                 if format.is_empty() || target.is_empty() {
-                    return failure(id, "exportError", "an export request needs a format and a target path".to_string());
+                    return failure(id, "exportError", argument_failure("an export request needs a format and a target path"));
                 }
                 let overwrite = value.get("overwrite").and_then(Value::as_bool).unwrap_or(true);
                 match call_export(handle_of(&value), &format, &target, overwrite) {
@@ -354,67 +359,81 @@ fn reply(id: Value, kind: &str, payload: Value) -> IpcOutcome {
     IpcOutcome::ReplyToPage(body.to_string())
 }
 
-fn failure(id: Value, kind: &str, message: String) -> IpcOutcome {
-    reply(id, kind, json!({ "message": message }))
+fn failure(id: Value, kind: &str, error: Value) -> IpcOutcome {
+    // The reply carries the verifiable `code` and typed `params` beside the
+    // display `message`, so the page can branch on the contract, not on prose.
+    let mut body = json!({ "message": error["message"].clone(), "code": error["code"].clone() });
+    if let Some(params) = error.get("params").filter(|params| !params.is_null()) {
+        body["params"] = params.clone();
+    }
+    reply(id, kind, body)
 }
 
 fn handle_of(value: &Value) -> u64 {
     value.get("handle").and_then(Value::as_u64).unwrap_or(0)
 }
 
-fn service_failure(error: ServiceError) -> String {
-    format!("{}: {}", error.code, error.message)
+fn service_failure(error: ServiceError) -> Value {
+    let mut payload = json!({ "code": error.code(), "message": error.message() });
+    if !error.params().is_null() {
+        payload["params"] = error.params().clone();
+    }
+    payload
 }
 
-fn call_create(request: &Value) -> std::result::Result<Value, String> {
+fn argument_failure(message: &str) -> Value {
+    json!({ "code": "session/argument-invalid", "message": message })
+}
+
+fn call_create(request: &Value) -> std::result::Result<Value, Value> {
     open_excel_workbook::create(request).map_err(service_failure)
 }
 
-fn call_open(path: &str) -> std::result::Result<Value, String> {
+fn call_open(path: &str) -> std::result::Result<Value, Value> {
     open_excel_workbook::open(Path::new(path)).map_err(service_failure)
 }
 
-fn call_save(handle: u64, path: &str, overwrite: bool) -> std::result::Result<Value, String> {
+fn call_save(handle: u64, path: &str, overwrite: bool) -> std::result::Result<Value, Value> {
     open_excel_workbook::save(handle, Path::new(path), overwrite).map_err(service_failure)
 }
 
-fn call_inspect(handle: u64, checks: Option<Vec<String>>) -> std::result::Result<Value, String> {
+fn call_inspect(handle: u64, checks: Option<Vec<String>>) -> std::result::Result<Value, Value> {
     open_excel_workbook::inspect(handle, checks).map_err(service_failure)
 }
 
-fn call_export(handle: u64, format: &str, target: &str, overwrite: bool) -> std::result::Result<Value, String> {
+fn call_export(handle: u64, format: &str, target: &str, overwrite: bool) -> std::result::Result<Value, Value> {
     open_excel_workbook::export(handle, format, Path::new(target), overwrite).map_err(service_failure)
 }
 
-fn call_summary(handle: u64) -> std::result::Result<Value, String> {
+fn call_summary(handle: u64) -> std::result::Result<Value, Value> {
     open_excel_workbook::summary(handle).map_err(service_failure)
 }
 
-fn call_edit(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+fn call_edit(handle: u64, request: &Value) -> std::result::Result<Value, Value> {
     open_excel_workbook::edit(handle, request).map_err(service_failure)
 }
 
-fn call_cell(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+fn call_cell(handle: u64, request: &Value) -> std::result::Result<Value, Value> {
     open_excel_workbook::cell(handle, request).map_err(service_failure)
 }
 
-fn call_range(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+fn call_range(handle: u64, request: &Value) -> std::result::Result<Value, Value> {
     open_excel_workbook::range(handle, request).map_err(service_failure)
 }
 
-fn call_recalc(handle: u64) -> std::result::Result<Value, String> {
+fn call_recalc(handle: u64) -> std::result::Result<Value, Value> {
     open_excel_workbook::recalculate(handle).map_err(service_failure)
 }
 
-fn call_find(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+fn call_find(handle: u64, request: &Value) -> std::result::Result<Value, Value> {
     open_excel_workbook::find(handle, request).map_err(service_failure)
 }
 
-fn call_render(handle: u64, request: &Value) -> std::result::Result<Value, String> {
+fn call_render(handle: u64, request: &Value) -> std::result::Result<Value, Value> {
     open_excel_workbook::render(handle, request).map_err(service_failure)
 }
 
-fn call_close(handle: u64) -> std::result::Result<(), String> {
+fn call_close(handle: u64) -> std::result::Result<(), Value> {
     open_excel_workbook::close(handle).map_err(service_failure)
 }
 
