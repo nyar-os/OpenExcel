@@ -11,8 +11,8 @@
 export { OpenExcel } from './open-excel.js';
 export { GuiError, closeGui, defaultGuiContentDir, isGuiOpen, openGui, pumpEvents, runGui } from './gui.js';
 export type { GuiCloseResult, GuiOpenResult, GuiStatus, OpenGuiOptions } from './gui.js';
-export { NotImplementedError, OpenExcelError, errorCodes, isOpenExcelError } from './errors.js';
-export type { OpenExcelErrorCode, OpenExcelErrorDetails, OpenExcelErrorOptions } from './errors.js';
+export { NotImplementedError, OpenExcelError, errorCodes, isOpenExcelError, renderErrorCopy, setErrorLocale } from './errors.js';
+export type { OpenExcelErrorCode, OpenExcelErrorDetails, OpenExcelErrorOptions, OpenExcelErrorParams } from './errors.js';
 export { defaultIntentFor, formatFromPath, formatInfo, formatRegistry, workbookFormats } from './formats.js';
 export type {
     FormatFamily,

@@ -6,7 +6,14 @@
  * here knows about a command line.
  */
 
-import { NotImplementedError, OpenExcelError, errorCodes, type OpenExcelErrorCode } from './errors.js';
+import {
+    NotImplementedError,
+    OpenExcelError,
+    errorCodes,
+    renderErrorCopy,
+    type OpenExcelErrorCode,
+    type OpenExcelErrorParams,
+} from './errors.js';
 import { nativeBinding } from './native.js';
 import type {
     CellDetail,
@@ -64,13 +71,33 @@ function translate(error: unknown): OpenExcelError {
     if (error instanceof OpenExcelError) {
         return error;
     }
-    const message = error instanceof Error ? error.message : String(error);
-    const separator = message.indexOf(': ');
-    const code = separator > 0 ? message.slice(0, separator) : '';
-    if (knownCodes.has(code)) {
-        return new OpenExcelError(code as OpenExcelErrorCode, message.slice(separator + 2), { details: { feature: code } });
+    const native = error instanceof Error ? (error as Error & { code?: unknown; detail?: unknown }) : undefined;
+    const message = native ? native.message : String(error);
+    const rawCode = native?.code;
+    const code = typeof rawCode === 'string' ? rawCode : undefined;
+    if (code !== undefined) {
+        const params = readParams(native?.detail);
+        return new OpenExcelError(code as OpenExcelErrorCode, renderErrorCopy(code, params, message), { params, cause: error });
     }
-    return new OpenExcelError('format/invalid', message, { cause: error });
+    // Compatibility entry for addons older than the structured contract, which
+    // concatenated `code: message` into the Error text. Current bindings always
+    // carry `code` and `detail.params`, so this split never runs against them.
+    const separator = message.indexOf(': ');
+    const legacy = separator > 0 ? message.slice(0, separator) : '';
+    if (knownCodes.has(legacy)) {
+        return new OpenExcelError(legacy as OpenExcelErrorCode, message.slice(separator + 2), { cause: error });
+    }
+    return new OpenExcelError('binding/failure', message, { cause: error });
+}
+
+function readParams(detail: unknown): OpenExcelErrorParams {
+    if (typeof detail === 'object' && detail !== null) {
+        const params = (detail as { params?: unknown }).params;
+        if (typeof params === 'object' && params !== null && !Array.isArray(params)) {
+            return params as OpenExcelErrorParams;
+        }
+    }
+    return {};
 }
 
 /** Reads the capability matrix of the installed addon. */

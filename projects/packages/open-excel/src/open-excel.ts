@@ -6,7 +6,7 @@
  * methods, so a failure is always awaited and always carries a stable code.
  */
 
-import { OpenExcelError } from './errors.js';
+import { OpenExcelError, setErrorLocale } from './errors.js';
 import { formatFromPath, type WorkbookFormat, type WorkbookIntent } from './formats.js';
 import * as service from './service.js';
 import type {
@@ -44,6 +44,7 @@ export class OpenExcel {
 
     constructor(options: OpenExcelOptions = {}) {
         this.locale = options.locale ?? 'en';
+        setErrorLocale(this.locale);
     }
 
     /** Whether {@link dispose} has run. */

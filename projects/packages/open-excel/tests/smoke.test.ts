@@ -9,6 +9,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import { formatFromPath, formatInfo, OpenExcel, OpenExcelError, workbookFormats } from '../src/index.js';
@@ -255,4 +258,47 @@ test('cross-sheet moves, swaps, names and merges carry formula sources and fail 
     assert.equal(after.revision, revisionBefore);
     assert.equal(after.names.filter((entry) => entry.name === 'Blocked').length, 0);
     await excel.dispose();
+});
+
+test('real binding failures carry the typed params of their code', { skip: installed ? false : 'a built addon is not installed' }, async () => {
+    const excel = new OpenExcel();
+    try {
+        await assert.rejects(
+            excel.open({ path: join(tmpdir(), 'open-excel-missing-file.oexcel') }),
+            (error: unknown) => {
+                assert.ok(error instanceof OpenExcelError);
+                assert.equal(error.code, 'io/read');
+                assert.equal(error.params.kind, 'NotFound');
+                assert.equal(typeof error.params.path, 'string');
+                return true;
+            },
+        );
+
+        const created = await excel.create({ title: 'Params' });
+        await assert.rejects(
+            excel.cell(created, { sheet: 'Nope', address: 'A1' }),
+            (error: unknown) => {
+                assert.ok(error instanceof OpenExcelError);
+                assert.equal(error.code, 'object/not-found');
+                assert.equal(error.params.kind, 'sheet');
+                assert.equal(error.params.id, 'Nope');
+                return true;
+            },
+        );
+
+        const dir = mkdtempSync(join(tmpdir(), 'open-excel-params-'));
+        const target = join(dir, 'ledger.oexcel');
+        writeFileSync(target, 'occupied\n');
+        await assert.rejects(
+            excel.save(created, { target }),
+            (error: unknown) => {
+                assert.ok(error instanceof OpenExcelError);
+                assert.equal(error.code, 'io/exists');
+                assert.equal(error.params.path, target);
+                return true;
+            },
+        );
+    } finally {
+        await excel.dispose();
+    }
 });
