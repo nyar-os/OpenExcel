@@ -39,6 +39,13 @@ pub(crate) enum Shift {
         /// Last deleted line.
         end: u32,
     },
+    /// Exchange lines `first` and `second`.
+    Swap {
+        /// One of the exchanged lines.
+        first: u32,
+        /// The other exchanged line.
+        second: u32,
+    },
 }
 
 /// Rewrites the formulas of every sheet after a structural edit.
@@ -442,6 +449,17 @@ fn shift_point(value: u32, axis: Axis, shift: Shift) -> PointShift {
                 PointShift::Removed
             }
         }
+        Shift::Swap { first, second } => {
+            if value == first {
+                PointShift::Moved(second)
+            }
+            else if value == second {
+                PointShift::Moved(first)
+            }
+            else {
+                PointShift::Kept
+            }
+        }
     }
 }
 
@@ -483,6 +501,11 @@ fn rewrite_range(group: &Group, axis: Axis, shift: Shift) -> Transformed {
             let move_line = |value: u32| if value >= at { value + count } else { value };
             let new_low = move_line(low);
             let new_high = move_line(high);
+            (new_low, new_high, new_low != low || new_high != high)
+        }
+        Shift::Swap { first, second } => {
+            let swap_line = |value: u32| if value == first { second } else if value == second { first } else { value };
+            let (new_low, new_high) = (swap_line(low).min(swap_line(high)), swap_line(low).max(swap_line(high)));
             (new_low, new_high, new_low != low || new_high != high)
         }
         Shift::Delete { start, end } => {

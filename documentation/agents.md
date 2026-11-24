@@ -179,6 +179,7 @@ await reopened.dispose();
 | `sheet.move` | `sheet`, `index` | — | Moves a sheet to a zero-based position. |
 | `row.insert` / `row.delete` | `sheet`, `row` | `count` (default `1`) | Inserts before or deletes from a one-based row. |
 | `column.insert` / `column.delete` | `sheet`, `column` | `count` (default `1`) | Inserts before or deletes from a one-based number or letter. |
+| `row.swap` / `column.swap` | `sheet`, `row`/`column`, `other` | — | Exchanges two whole rows or columns; cells, heights/widths and single-line merges move with the line, formula references to it follow, and a merge straddling either line is rejected. |
 | `row.setHeight` | `sheet`, `row`, `height` | `hidden` | Sets row height in points. |
 | `column.setWidth` | `sheet`, `column`, `width` | `hidden` | Sets column width in Excel character units. |
 | `cell.replaceText` | `sheet`, `find`, `replace` | `range`, `matchCase`, `limit` | Replaces text in string cell values, skipping formulas, and reports the replacement count. `range` defaults to the used rectangle; `limit` caps occurrences in row-major order. Each call appends `{ op: "cell.replaceText", sheet, range, replaced }` to `affected`. |

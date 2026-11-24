@@ -1587,6 +1587,14 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             structure::delete_columns(project, operation)?;
             0
         }
+        "row.swap" => {
+            structure::swap_rows(project, operation)?;
+            0
+        }
+        "column.swap" => {
+            structure::swap_columns(project, operation)?;
+            0
+        }
         other => return Err(ServiceError::new("object/unsupported", format!("edit operation `{other}` is not supported"))),
     };
     Ok(replacements)

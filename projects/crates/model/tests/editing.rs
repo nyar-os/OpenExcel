@@ -1351,3 +1351,120 @@ fn fill_rejects_bad_directions_and_merged_ranges_but_single_lines_are_no_ops() {
     assert_eq!(engine::cell(handle, &json!({ "sheet": "Sheet1", "address": "C1" })).expect("C1")["value"], json!("three"));
     engine::close(handle).expect("close");
 }
+
+#[test]
+fn row_swap_moves_cells_heights_merges_and_formula_references() {
+    let project_path = temp_path("row-swap", "oexcel");
+    let created = engine::create(&json!({ "title": "RowSwap" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["top", 1]] },
+                { "op": "range.set", "sheet": "Sheet1", "start": "A3", "rows": [["bottom", 3]] },
+                { "op": "row.setHeight", "sheet": "Sheet1", "row": 1, "height": 40 },
+                { "op": "format.set", "sheet": "Sheet1", "range": "B3", "style": { "bold": true } },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "D1", "end": "E1", "merge": true },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "F1", "formula": "=A1+A3" },
+                { "op": "row.swap", "sheet": "Sheet1", "row": 1, "other": 3 },
+            ]
+        }),
+    )
+    .expect("swap rows");
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    assert_eq!(cell_json(sheet, "A3")["value"]["text"], json!("top"));
+    assert_eq!(cell_json(sheet, "B3")["value"]["number"], json!(1.0));
+    assert_eq!(cell_json(sheet, "A1")["value"]["text"], json!("bottom"));
+    assert_eq!(cell_json(sheet, "B1")["value"]["number"], json!(3.0));
+    assert_eq!(cell_json(sheet, "B1")["style"]["bold"], json!(true), "styles travel with their cells");
+    let rows = sheet["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0]["index"].clone(), rows[0]["height"].clone()), (json!(3), json!(40.0)), "the height follows the row");
+    let merged = sheet["merged"].as_array().expect("merged");
+    assert_eq!(merged.len(), 1);
+    assert_eq!((merged[0]["startRow"].clone(), merged[0]["endRow"].clone()), (json!(3), json!(3)));
+    assert_eq!((merged[0]["startColumn"].clone(), merged[0]["endColumn"].clone()), (json!(4), json!(5)));
+    assert_eq!(cell_json(sheet, "F3")["formula"], json!("=A3+A1"), "formula cells move and their references follow their rows");
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn column_swap_moves_cells_widths_merges_and_formula_references() {
+    let project_path = temp_path("column-swap", "oexcel");
+    let created = engine::create(&json!({ "title": "ColumnSwap" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [["left", "right"]] },
+                { "op": "column.setWidth", "sheet": "Sheet1", "column": "A", "width": 30 },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "B5", "end": "B6", "merge": true },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "C3", "formula": "=A1*2" },
+                { "op": "column.swap", "sheet": "Sheet1", "column": "A", "other": "B" },
+            ]
+        }),
+    )
+    .expect("swap columns");
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    assert_eq!(cell_json(sheet, "B1")["value"]["text"], json!("left"));
+    assert_eq!(cell_json(sheet, "A1")["value"]["text"], json!("right"));
+    let columns = sheet["columns"].as_array().expect("columns");
+    let second = columns.iter().find(|record| record["min"] == json!(2)).expect("column B record");
+    assert_eq!((second["width"].clone(), second["custom"].clone()), (json!(30.0), json!(true)), "the width follows the column");
+    assert!(
+        columns.iter().all(|record| record["min"] != json!(1) || record["custom"] != json!(true)),
+        "column A keeps no custom width: {columns:?}"
+    );
+    let merged = sheet["merged"].as_array().expect("merged");
+    assert_eq!(merged.len(), 1);
+    assert_eq!((merged[0]["startColumn"].clone(), merged[0]["endColumn"].clone()), (json!(1), json!(1)));
+    assert_eq!((merged[0]["startRow"].clone(), merged[0]["endRow"].clone()), (json!(5), json!(6)));
+    assert_eq!(cell_json(sheet, "C3")["formula"], json!("=B1*2"), "references follow their columns");
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn line_swap_rejects_bad_lines_unknown_sheets_and_straddling_merges() {
+    let created = engine::create(&json!({ "title": "LineSwapErrors" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "merge.set", "sheet": "Sheet1", "start": "A2", "end": "A4", "merge": true },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "C1", "end": "D1", "merge": true },
+            ]
+        }),
+    )
+    .expect("seed merges");
+    for request in [
+        json!({ "operations": [{ "op": "row.swap", "sheet": "Sheet1", "row": 0, "other": 3 }] }),
+        json!({ "operations": [{ "op": "row.swap", "sheet": "Sheet1", "row": 2 }] }),
+        json!({ "operations": [{ "op": "row.swap", "sheet": "Sheet1", "row": 2, "other": 5 }] }),
+        json!({ "operations": [{ "op": "row.swap", "sheet": "Nope", "row": 2, "other": 5 }] }),
+        json!({ "operations": [{ "op": "column.swap", "sheet": "Sheet1", "column": "nope", "other": "D" }] }),
+        json!({ "operations": [{ "op": "column.swap", "sheet": "Sheet1", "column": "C", "other": "E" }] }),
+    ] {
+        let error = engine::edit(handle, &request).expect_err("invalid swap request");
+        assert_eq!(error.code, if request["operations"][0]["sheet"] == json!("Nope") { "object/not-found" } else { "session/argument-invalid" });
+    }
+    assert_eq!(engine::summary(handle).expect("summary")["revision"], json!(1), "rejected batches never advance");
+
+    let edited = engine::edit(
+        handle,
+        &json!({ "operations": [{ "op": "row.swap", "sheet": "Sheet1", "row": 1, "other": 1 }] }),
+    )
+    .expect("swapping a row with itself is a no-op");
+    assert_eq!(edited["revision"], json!(2));
+    engine::close(handle).expect("close");
+}

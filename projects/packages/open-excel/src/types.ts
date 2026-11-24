@@ -695,6 +695,32 @@ export type EditOperation =
       }
     | {
           /**
+           * Exchanges two whole rows. Cells, row heights and merges that sit entirely on
+           * one of the rows move with their row, and formula references to either row
+           * follow it. A merge that straddles one of the rows is rejected.
+           */
+          readonly op: 'row.swap';
+          readonly sheet: string;
+          /** One-based row to exchange. */
+          readonly row: number;
+          /** One-based row it is exchanged with. */
+          readonly other: number;
+      }
+    | {
+          /**
+           * Exchanges two whole columns. Cells, column widths and merges that sit entirely
+           * on one of the columns move with their column, and formula references to either
+           * column follow it. A merge that straddles one of the columns is rejected.
+           */
+          readonly op: 'column.swap';
+          readonly sheet: string;
+          /** One-based column number or a column letter such as `B`. */
+          readonly column: number | string;
+          /** Column it is exchanged with, as a one-based number or letter. */
+          readonly other: number | string;
+      }
+    | {
+          /**
            * Replaces text inside `range` and reports the replacement count.
            * When `range` is omitted the sheet's used rectangle is scanned.
            * Formula cells are skipped; `limit` caps the occurrences replaced,

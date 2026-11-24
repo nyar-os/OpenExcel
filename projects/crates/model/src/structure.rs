@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::{
     error::ServiceError,
-    model::{CellRange, NamedRange, Project, Sheet, SheetColumn},
+    model::{Cell, CellRange, NamedRange, Project, Sheet, SheetColumn},
     reference,
     shift::{self, Axis, Shift},
 };
@@ -18,6 +18,8 @@ use crate::{
 const MAX_ROW: u32 = 1_048_576;
 /// Last column of an XLSX sheet, `XFD`.
 const MAX_COLUMN: u32 = 16_384;
+/// Default column width in Excel character units, matching `Sheet::column_width`.
+const DEFAULT_WIDTH: f64 = 8.43;
 
 /// Inserts `count` empty rows before `row`.
 pub(crate) fn insert_rows(project: &mut Project, operation: &Value) -> Result<(), ServiceError> {
@@ -54,7 +56,7 @@ pub(crate) fn delete_rows(project: &mut Project, operation: &Value) -> Result<()
 /// Inserts `count` empty columns before `column`.
 pub(crate) fn insert_columns(project: &mut Project, operation: &Value) -> Result<(), ServiceError> {
     let index = sheet_index(project, operation)?;
-    let start = required_column(operation, "column.insert")?;
+    let start = required_column(operation, "column", "column.insert")?;
     let count = count_of(operation)?;
     ensure_band(start, count, MAX_COLUMN, "column.insert", "column")?;
     check_insert_columns(&project.sheets[index], start, count)?;
@@ -71,7 +73,7 @@ pub(crate) fn insert_columns(project: &mut Project, operation: &Value) -> Result
 /// Deletes `count` columns starting at `column`.
 pub(crate) fn delete_columns(project: &mut Project, operation: &Value) -> Result<(), ServiceError> {
     let index = sheet_index(project, operation)?;
-    let start = required_column(operation, "column.delete")?;
+    let start = required_column(operation, "column", "column.delete")?;
     let count = count_of(operation)?;
     let end = ensure_band(start, count, MAX_COLUMN, "column.delete", "column")?;
     let target = project.sheets[index].name.clone();
@@ -81,6 +83,215 @@ pub(crate) fn delete_columns(project: &mut Project, operation: &Value) -> Result
     shift::shift_project(project, &target, Axis::Column, Shift::Delete { start, end });
     project.normalize();
     Ok(())
+}
+
+/// Exchanges two whole rows.
+///
+/// Cells, row heights and merges that sit entirely on one of the two rows move
+/// with their row, and local formula references to either row follow it. A
+/// merge that straddles one of the rows is rejected because the exchange would
+/// tear its shape apart.
+pub(crate) fn swap_rows(project: &mut Project, operation: &Value) -> Result<(), ServiceError> {
+    let index = sheet_index(project, operation)?;
+    let first = required_position(operation, "row", "row.swap", MAX_ROW)?;
+    let second = required_position(operation, "other", "row.swap", MAX_ROW)?;
+    if first == second {
+        return Ok(());
+    }
+    let (first, second) = (first.min(second), first.max(second));
+    let sheet = &mut project.sheets[index];
+    check_swap_merges(&sheet.merged, Axis::Row, first, second, "row.swap")?;
+    swap_cells(sheet, Axis::Row, first, second);
+    swap_row_records(sheet, first, second);
+    swap_line_merges(sheet, Axis::Row, first, second);
+    let target = project.sheets[index].name.clone();
+    shift::shift_project(project, &target, Axis::Row, Shift::Swap { first, second });
+    project.normalize();
+    Ok(())
+}
+
+/// Exchanges two whole columns.
+///
+/// Cells, column widths and merges that sit entirely on one of the two columns
+/// move with their column, and local formula references to either column follow
+/// it. A merge that straddles one of the columns is rejected.
+pub(crate) fn swap_columns(project: &mut Project, operation: &Value) -> Result<(), ServiceError> {
+    let index = sheet_index(project, operation)?;
+    let first = required_column(operation, "column", "column.swap")?;
+    let second = required_column(operation, "other", "column.swap")?;
+    if first == second {
+        return Ok(());
+    }
+    let (first, second) = (first.min(second), first.max(second));
+    let sheet = &mut project.sheets[index];
+    check_swap_merges(&sheet.merged, Axis::Column, first, second, "column.swap")?;
+    swap_cells(sheet, Axis::Column, first, second);
+    swap_column_records(sheet, first, second);
+    swap_line_merges(sheet, Axis::Column, first, second);
+    let target = project.sheets[index].name.clone();
+    shift::shift_project(project, &target, Axis::Column, Shift::Swap { first, second });
+    project.normalize();
+    Ok(())
+}
+
+/// Rejects a swap where a merged range crosses one of the two lines.
+fn check_swap_merges(
+    merged: &[CellRange],
+    axis: Axis,
+    first: u32,
+    second: u32,
+    op: &str,
+) -> Result<(), ServiceError> {
+    for range in merged {
+        let (low, high) = match axis {
+            Axis::Row => (range.start_row, range.end_row),
+            Axis::Column => (range.start_column, range.end_column),
+        };
+        let touches = low <= first && first <= high || low <= second && second <= high;
+        if touches && low != high {
+            return Err(ServiceError::argument(format!(
+                "`{op}` cannot move merged range `{}` across the other line",
+                range.reference()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Exchanges every cell that sits on one of the two lines.
+fn swap_cells(sheet: &mut Sheet, axis: Axis, first: u32, second: u32) {
+    let mut from_first: Vec<Cell> = Vec::new();
+    let mut from_second: Vec<Cell> = Vec::new();
+    sheet.cells.retain(|cell| {
+        let line = match axis {
+            Axis::Row => cell.row,
+            Axis::Column => cell.column,
+        };
+        if line == first {
+            from_first.push(cell.clone());
+            false
+        }
+        else if line == second {
+            from_second.push(cell.clone());
+            false
+        }
+        else {
+            true
+        }
+    });
+    for mut cell in from_first {
+        match axis {
+            Axis::Row => cell.row = second,
+            Axis::Column => cell.column = second,
+        }
+        cell.reference = reference::format_reference(cell.row, cell.column);
+        sheet.set_cell(cell);
+    }
+    for mut cell in from_second {
+        match axis {
+            Axis::Row => cell.row = first,
+            Axis::Column => cell.column = first,
+        }
+        cell.reference = reference::format_reference(cell.row, cell.column);
+        sheet.set_cell(cell);
+    }
+}
+
+/// Moves the row records of the two swapped rows to the other row.
+fn swap_row_records(sheet: &mut Sheet, first: u32, second: u32) {
+    let at_first = sheet.rows.iter().position(|record| record.index == first);
+    let at_second = sheet.rows.iter().position(|record| record.index == second);
+    match (at_first, at_second) {
+        (Some(a), Some(b)) => {
+            sheet.rows[a].index = second;
+            sheet.rows[b].index = first;
+        }
+        (Some(a), None) => sheet.rows[a].index = second,
+        (None, Some(b)) => sheet.rows[b].index = first,
+        (None, None) => {}
+    }
+    sheet.rows.sort_by_key(|record| record.index);
+}
+
+/// Exchanges the layout of two columns, splitting and merging the width records.
+fn swap_column_records(sheet: &mut Sheet, first: u32, second: u32) {
+    let mut records: Vec<SheetColumn> = Vec::with_capacity(sheet.columns.len() + 4);
+    for record in std::mem::take(&mut sheet.columns) {
+        let mut cuts: Vec<u32> =
+            [first, first + 1, second, second + 1].into_iter().filter(|cut| *cut > record.min && *cut <= record.max).collect();
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut start = record.min;
+        for cut in cuts {
+            records.push(SheetColumn { min: start, max: cut - 1, ..record.clone() });
+            start = cut;
+        }
+        records.push(SheetColumn { min: start, max: record.max, ..record });
+    }
+    let a = records.iter().position(|record| record.min == first && record.max == first);
+    let b = records.iter().position(|record| record.min == second && record.max == second);
+    if a.is_none() {
+        records.push(SheetColumn { min: first, max: first, width: DEFAULT_WIDTH, custom: false, hidden: false });
+    }
+    if b.is_none() {
+        records.push(SheetColumn { min: second, max: second, width: DEFAULT_WIDTH, custom: false, hidden: false });
+    }
+    let (a, b) = (
+        records.iter().position(|record| record.min == first && record.max == first).expect("first column record"),
+        records.iter().position(|record| record.min == second && record.max == second).expect("second column record"),
+    );
+    let (width, custom, hidden) = (records[b].width, records[b].custom, records[b].hidden);
+    records[b].width = records[a].width;
+    records[b].custom = records[a].custom;
+    records[b].hidden = records[a].hidden;
+    records[a].width = width;
+    records[a].custom = custom;
+    records[a].hidden = hidden;
+    records.sort_by_key(|record| record.min);
+    let mut merged: Vec<SheetColumn> = Vec::with_capacity(records.len());
+    for record in records {
+        match merged.last_mut() {
+            Some(last)
+                if last.max + 1 == record.min
+                    && last.width == record.width
+                    && last.custom == record.custom
+                    && last.hidden == record.hidden =>
+            {
+                last.max = record.max;
+            }
+            _ => merged.push(record),
+        }
+    }
+    sheet.columns = merged;
+}
+
+/// Moves merges that sit entirely on one swapped line to the other line.
+fn swap_line_merges(sheet: &mut Sheet, axis: Axis, first: u32, second: u32) {
+    for range in &mut sheet.merged {
+        match axis {
+            Axis::Row if range.start_row == range.end_row => {
+                if range.start_row == first {
+                    range.start_row = second;
+                    range.end_row = second;
+                }
+                else if range.start_row == second {
+                    range.start_row = first;
+                    range.end_row = first;
+                }
+            }
+            Axis::Column if range.start_column == range.end_column => {
+                if range.start_column == first {
+                    range.start_column = second;
+                    range.end_column = second;
+                }
+                else if range.start_column == second {
+                    range.start_column = first;
+                    range.end_column = first;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Resolves the sheet an operation targets.
@@ -101,21 +312,21 @@ fn required_position(operation: &Value, key: &str, op: &str, max: u32) -> Result
 }
 
 /// Reads the required column of an operation as a letter or a one-based number.
-fn required_column(operation: &Value, op: &str) -> Result<u32, ServiceError> {
-    let column = match operation.get("column") {
+fn required_column(operation: &Value, key: &str, op: &str) -> Result<u32, ServiceError> {
+    let column = match operation.get(key) {
         Some(Value::Number(number)) => number
             .as_u64()
             .and_then(|value| u32::try_from(value).ok())
-            .ok_or_else(|| ServiceError::argument(format!("`{op}` needs a one-based `column` or a column letter")))?,
+            .ok_or_else(|| ServiceError::argument(format!("`{op}` needs a one-based `{key}` or a column letter")))?,
         Some(Value::String(text)) => reference::column_number(text.trim())
             .ok_or_else(|| ServiceError::argument(format!("`{text}` is not a column letter such as `B`")))?,
         Some(_) => {
-            return Err(ServiceError::argument(format!("`{op}` needs a one-based `column` or a column letter")));
+            return Err(ServiceError::argument(format!("`{op}` needs a one-based `{key}` or a column letter")));
         }
-        None => return Err(ServiceError::argument(format!("`{op}` needs a `column`"))),
+        None => return Err(ServiceError::argument(format!("`{op}` needs a `{key}`"))),
     };
     if column == 0 || column > MAX_COLUMN {
-        return Err(ServiceError::argument(format!("`{op}` needs a `column` between 1 and {MAX_COLUMN}")));
+        return Err(ServiceError::argument(format!("`{op}` needs a `{key}` between 1 and {MAX_COLUMN}")));
     }
     Ok(column)
 }
