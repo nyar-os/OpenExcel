@@ -1536,3 +1536,67 @@ fn range_insert_rejects_bad_requests() {
     assert_eq!(engine::summary(handle).expect("summary")["revision"], json!(1), "rejected batches never advance");
     engine::close(handle).expect("close");
 }
+
+#[test]
+fn range_delete_shifts_cells_up_or_left() {
+    let project_path = temp_path("range-delete", "oexcel");
+    let created = engine::create(&json!({ "title": "RangeDelete" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    let edited = engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "A1", "rows": [[1], [2], [3], [4]] },
+                { "op": "range.set", "sheet": "Sheet1", "start": "B1", "rows": [["x", "y"]] },
+                { "op": "merge.set", "sheet": "Sheet1", "start": "A5", "end": "A6", "merge": true },
+                { "op": "cell.set", "sheet": "Sheet1", "reference": "E1", "formula": "=SUM(A1:A4)" },
+                { "op": "range.delete", "sheet": "Sheet1", "range": "A2:A3", "shift": "up" },
+                { "op": "range.delete", "sheet": "Sheet1", "range": "B1:B1", "shift": "left" },
+            ]
+        }),
+    )
+    .expect("delete ranges");
+    assert_eq!(
+        edited["affected"],
+        json!([
+            { "op": "range.delete", "sheet": "Sheet1", "range": "A2:A3" },
+            { "op": "range.delete", "sheet": "Sheet1", "range": "B1:B1" },
+        ])
+    );
+    engine::save(handle, &project_path, true).expect("save");
+    engine::close(handle).expect("close");
+
+    let project = read_project_json(&project_path);
+    let sheet = &project["sheets"][0];
+    let cells = sheet["cells"].as_array().expect("cells");
+    assert_eq!(cell_json(sheet, "A1")["value"]["number"], json!(1.0));
+    assert_eq!(cell_json(sheet, "A2")["value"]["number"], json!(4.0), "the row below the band moved up");
+    assert!(cells.iter().all(|cell| cell["reference"] != json!("A3") && cell["reference"] != json!("A4")), "the deleted rows are empty");
+    assert_eq!(cell_json(sheet, "B1")["value"]["text"], json!("y"), "the left shift pulled y from C1");
+    assert_eq!(cell_json(sheet, "D1")["formula"], json!("=SUM(A1:A2)"), "the range clamped across the deleted band and the formula cell shifted left");
+    let merged = sheet["merged"].as_array().expect("merged");
+    assert_eq!((merged[0]["startRow"].clone(), merged[0]["endRow"].clone()), (json!(3), json!(4)));
+    let _ = fs::remove_file(project_path);
+}
+
+#[test]
+fn range_delete_rejects_bad_requests() {
+    let created = engine::create(&json!({ "title": "RangeDeleteErrors" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({ "operations": [{ "op": "merge.set", "sheet": "Sheet1", "start": "A1", "end": "A3", "merge": true }] }),
+    )
+    .expect("seed merge");
+    for request in [
+        json!({ "operations": [{ "op": "range.delete", "sheet": "Sheet1", "range": "A2:A2" }] }),
+        json!({ "operations": [{ "op": "range.delete", "sheet": "Sheet1", "range": "A2:A3", "shift": "nowhere" }] }),
+        json!({ "operations": [{ "op": "range.delete", "sheet": "Sheet1", "range": "A2:A3", "shift": "up" }] }),
+        json!({ "operations": [{ "op": "range.delete", "sheet": "Nope", "range": "A2:A3", "shift": "up" }] }),
+    ] {
+        let error = engine::edit(handle, &request).expect_err("invalid delete request");
+        assert_eq!(error.code, if request["operations"][0]["sheet"] == json!("Nope") { "object/not-found" } else { "session/argument-invalid" });
+    }
+    assert_eq!(engine::summary(handle).expect("summary")["revision"], json!(1), "rejected batches never advance");
+    engine::close(handle).expect("close");
+}

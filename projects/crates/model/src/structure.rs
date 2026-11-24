@@ -193,6 +193,73 @@ pub(crate) fn insert_range(project: &mut Project, operation: &Value) -> Result<C
     Ok(range)
 }
 
+/// Deletes a rectangle, shifting the cells below or beside it back.
+///
+/// `shift` is `up` or `left`. Cells inside the rectangle are removed and the
+/// rest of the band moves up or left; references elsewhere follow. Merges fully
+/// inside the band vanish, while a merge crossing the rectangle is rejected.
+/// Row heights, column widths, frozen panes and defined names stay put.
+pub(crate) fn delete_range(project: &mut Project, operation: &Value) -> Result<CellRange, ServiceError> {
+    let index = sheet_index(project, operation)?;
+    let range = required_rectangle(operation, "range.delete")?;
+    let direction = required_direction(operation, "range.delete", "up", "left")?;
+    let axis = if direction == "up" { Axis::Row } else { Axis::Column };
+    let (start, end, across_start, across_end) = match axis {
+        Axis::Row => (range.start_row, range.end_row, range.start_column, range.end_column),
+        Axis::Column => (range.start_column, range.end_column, range.start_row, range.end_row),
+    };
+    let count = end - start + 1;
+    let sheet = &mut project.sheets[index];
+    for merged in &sheet.merged {
+        let (low, high, across_low, across_high) = band_span(merged, axis);
+        let overlaps_band = across_low <= across_end && across_high >= across_start;
+        if overlaps_band && low <= end && high >= start && !(low >= start && high <= end) {
+            return Err(ServiceError::argument(format!(
+                "`range.delete` cannot remove merged range `{}` that crosses the rectangle",
+                merged.reference()
+            )));
+        }
+    }
+    sheet.cells.retain(|cell| {
+        let (line, across) = line_across(cell, axis);
+        !((across_start..=across_end).contains(&across) && (start..=end).contains(&line))
+    });
+    for cell in &mut sheet.cells {
+        let (line, across) = line_across(cell, axis);
+        if (across_start..=across_end).contains(&across) && line > end {
+            match axis {
+                Axis::Row => cell.row -= count,
+                Axis::Column => cell.column -= count,
+            }
+        }
+    }
+    sheet.merged = std::mem::take(&mut sheet.merged)
+        .into_iter()
+        .filter_map(|mut merged| {
+            let (low, high, across_low, across_high) = band_span(&merged, axis);
+            let overlaps_band = across_low <= across_end && across_high >= across_start;
+            if overlaps_band {
+                let (low, high) = delete_span((low, high), start, end)?;
+                match axis {
+                    Axis::Row => {
+                        merged.start_row = low;
+                        merged.end_row = high;
+                    }
+                    Axis::Column => {
+                        merged.start_column = low;
+                        merged.end_column = high;
+                    }
+                }
+            }
+            (merged.rows() > 1 || merged.columns() > 1).then_some(merged)
+        })
+        .collect();
+    let target = project.sheets[index].name.clone();
+    shift::shift_project(project, &target, axis, Shift::BandDelete { start, end, across_start, across_end });
+    project.normalize();
+    Ok(range)
+}
+
 /// Reads the required A1 rectangle of a range edit.
 fn required_rectangle(operation: &Value, op: &str) -> Result<CellRange, ServiceError> {
     let range = operation

@@ -1040,6 +1040,11 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             affected.push(range_effect(project, operation, "range.insert", &written));
             0
         }
+        "range.delete" => {
+            let written = structure::delete_range(project, operation)?;
+            affected.push(range_effect(project, operation, "range.delete", &written));
+            0
+        }
         "range.flip" => {
             let written = flip_range(project, operation)?;
             affected.push(range_effect(project, operation, "range.flip", &written));

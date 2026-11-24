@@ -504,6 +504,22 @@ export interface RangeInsertOperation {
     readonly shift: 'down' | 'right';
 }
 
+/**
+ * Deletes `range`, shifting the rest of its band back.
+ *
+ * `up` pulls the cells below the rectangle (in the rectangle's columns) up by
+ * its height; `left` pulls the cells to its right (in its rows) left by its
+ * width. References elsewhere on the sheet follow the moved cells, merges fully
+ * inside the band vanish, and a merge crossing the rectangle is rejected. Row
+ * heights, column widths, frozen panes and defined names stay put.
+ */
+export interface RangeDeleteOperation {
+    readonly op: 'range.delete';
+    readonly sheet: string;
+    readonly range: string;
+    readonly shift: 'up' | 'left';
+}
+
 /** One operation of `Workbook.edit()`. */
 export type EditOperation =
     | {
@@ -883,6 +899,7 @@ export type EditOperation =
     | RangeFlipOperation
     | RangeFillOperation
     | RangeInsertOperation
+    | RangeDeleteOperation
     | { readonly op: 'range.clear'; readonly sheet: string; readonly range: string };
 
 /** Request of `Workbook.edit()`. */
