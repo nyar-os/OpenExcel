@@ -1964,3 +1964,39 @@ fn cross_sheet_range_edits_keep_formula_sources_and_reject_merged_bands() {
     );
     engine::close(handle).expect("close");
 }
+
+#[test]
+fn upstream_aliases_line_shifts_and_named_ranges_keep_their_contracts() {
+    let created = engine::create(&json!({ "title": "Upstream" })).expect("create");
+    let handle = created["handle"].as_u64().expect("handle");
+    engine::edit(
+        handle,
+        &json!({
+            "operations": [
+                { "op": "range.set", "sheet": "Sheet1", "start": "B1", "rows": [[2], [3]] },
+                { "op": "name.define", "name": "Sales", "sheet": "Sheet1", "range": "B1:B2" },
+                { "op": "sheet.add", "name": "Notes" },
+                { "op": "cell.set", "sheet": "Notes", "reference": "A1", "formula": "=CONCATENATE(\"a\", 1)" },
+                { "op": "cell.set", "sheet": "Notes", "reference": "A2", "formula": "=Sheet1!B2" },
+            ]
+        }),
+    )
+    .expect("seed");
+    let read = |address: &str| engine::cell(handle, &json!({ "sheet": "Notes", "address": address })).expect(address);
+    // The engine folds the alias itself, so the stored text is never rewritten.
+    assert_eq!(read("A1")["value"], json!("a1"), "the legacy alias computes");
+    assert_eq!(read("A1")["formula"], json!("=CONCATENATE(\"a\", 1)"), "the formula keeps its spelling");
+    // A whole-line insert on the target sheet shifts the cross-sheet reference
+    // and the named range through the engine's shared rules.
+    engine::edit(handle, &json!({ "operations": [{ "op": "row.insert", "sheet": "Sheet1", "row": 1 }] })).expect("insert");
+    assert_eq!(read("A2")["formula"], json!("=Sheet1!B3"), "the qualified reference follows the edit");
+    assert_eq!(
+        engine::summary(handle).expect("summary")["names"],
+        json!([{ "name": "Sales", "sheet": "Sheet1", "range": "B2:B3" }]),
+        "the named range moves with the inserted row"
+    );
+    // Deleting the whole moved band kills the name, matching the engine rules.
+    engine::edit(handle, &json!({ "operations": [{ "op": "row.delete", "sheet": "Sheet1", "row": 2, "count": 2 }] })).expect("delete");
+    assert_eq!(engine::summary(handle).expect("summary")["names"].as_array().expect("names").len(), 0, "a name inside the band dies");
+    engine::close(handle).expect("close");
+}

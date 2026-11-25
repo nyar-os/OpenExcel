@@ -5,6 +5,7 @@
 //! Formula text moves through [`crate::shift`]. The row and column arguments are
 //! one-based, matching the rest of the model; a column may also be a letter.
 
+use document_spreadsheet_formula::{LineEdit, NameTable};
 use serde_json::Value;
 
 use crate::{
@@ -32,7 +33,9 @@ pub(crate) fn insert_rows(project: &mut Project, operation: &Value) -> Result<()
     let id = project.sheets[index].id.clone();
     check_insert_names(&project.names, &id, start, count, MAX_ROW, |range| range.end_row, "row")?;
     shift_rows(&mut project.sheets[index], start, count);
-    shift_named_rows(&mut project.names, &id, start, count);
+    if let Some(edit) = LineEdit::insert(&id, Axis::Row, start, count) {
+        shift_names(&mut project.names, &id, &edit);
+    }
     shift::shift_project(project, &target, Axis::Row, Shift::Insert { at: start, count });
     project.normalize();
     Ok(())
@@ -47,7 +50,9 @@ pub(crate) fn delete_rows(project: &mut Project, operation: &Value) -> Result<()
     let target = project.sheets[index].name.clone();
     let id = project.sheets[index].id.clone();
     delete_rows_from(&mut project.sheets[index], start, end);
-    delete_named_rows(&mut project.names, &id, start, end);
+    if let Some(edit) = LineEdit::delete(&id, Axis::Row, start, end - start + 1) {
+        shift_names(&mut project.names, &id, &edit);
+    }
     shift::shift_project(project, &target, Axis::Row, Shift::Delete { start, end });
     project.normalize();
     Ok(())
@@ -64,7 +69,9 @@ pub(crate) fn insert_columns(project: &mut Project, operation: &Value) -> Result
     let id = project.sheets[index].id.clone();
     check_insert_names(&project.names, &id, start, count, MAX_COLUMN, |range| range.end_column, "column")?;
     shift_columns(&mut project.sheets[index], start, count);
-    shift_named_columns(&mut project.names, &id, start, count);
+    if let Some(edit) = LineEdit::insert(&id, Axis::Column, start, count) {
+        shift_names(&mut project.names, &id, &edit);
+    }
     shift::shift_project(project, &target, Axis::Column, Shift::Insert { at: start, count });
     project.normalize();
     Ok(())
@@ -79,7 +86,9 @@ pub(crate) fn delete_columns(project: &mut Project, operation: &Value) -> Result
     let target = project.sheets[index].name.clone();
     let id = project.sheets[index].id.clone();
     delete_columns_from(&mut project.sheets[index], start, end);
-    delete_named_columns(&mut project.names, &id, start, end);
+    if let Some(edit) = LineEdit::delete(&id, Axis::Column, start, end - start + 1) {
+        shift_names(&mut project.names, &id, &edit);
+    }
     shift::shift_project(project, &target, Axis::Column, Shift::Delete { start, end });
     project.normalize();
     Ok(())
@@ -883,65 +892,57 @@ fn check_insert_names(
     Ok(())
 }
 
-/// Moves the named ranges on one sheet down by `count`, expanding crossings.
-fn shift_named_rows(names: &mut [NamedRange], sheet: &str, start: u32, count: u32) {
-    for named in names.iter_mut().filter(|named| named.sheet == sheet) {
-        let range = &mut named.range;
-        if range.end_row < start {
-            continue;
+/// Moves the named ranges on one sheet through an upstream whole-line edit.
+///
+/// The rectangles follow the engine's `NameTable` rules. Entries the engine
+/// will not register (malformed imported spellings) keep their stored
+/// rectangle; a range that falls entirely inside a deleted band loses its name.
+fn shift_names(names: &mut Vec<NamedRange>, sheet: &str, edit: &LineEdit) {
+    let mut table = NameTable::new();
+    let mut registered: Vec<usize> = Vec::new();
+    for (index, named) in names.iter().enumerate() {
+        if named.sheet == sheet && table.define(&named.name, sheet, shared_range(&named.range)).is_ok() {
+            registered.push(index);
         }
-        if range.start_row >= start {
-            range.start_row += count;
-        }
-        range.end_row += count;
     }
-}
-
-/// Moves the named ranges on one sheet right by `count`, expanding crossings.
-fn shift_named_columns(names: &mut [NamedRange], sheet: &str, start: u32, count: u32) {
-    for named in names.iter_mut().filter(|named| named.sheet == sheet) {
-        let range = &mut named.range;
-        if range.end_column < start {
-            continue;
-        }
-        if range.start_column >= start {
-            range.start_column += count;
-        }
-        range.end_column += count;
+    if registered.is_empty() {
+        return;
     }
-}
-
-/// Shrinks or moves named ranges across a deleted row band; a range that
-/// falls entirely inside the band loses its name.
-fn delete_named_rows(names: &mut Vec<NamedRange>, sheet: &str, start: u32, end: u32) {
-    names.retain_mut(|named| {
-        if named.sheet != sheet {
-            return true;
+    table.shift(edit);
+    let mut dropped: Vec<usize> = Vec::new();
+    for index in registered {
+        match table.resolve(&names[index].name) {
+            Some(shifted) => names[index].range = project_range(&shifted.range),
+            None => dropped.push(index),
         }
-        match delete_span((named.range.start_row, named.range.end_row), start, end) {
-            Some((start_row, end_row)) => {
-                named.range.start_row = start_row;
-                named.range.end_row = end_row;
-                true
-            }
-            None => false,
-        }
+    }
+    if dropped.is_empty() {
+        return;
+    }
+    let mut position = 0usize;
+    names.retain(|_| {
+        let keep = !dropped.contains(&position);
+        position += 1;
+        keep
     });
 }
 
-/// Shrinks or moves named ranges across a deleted column band.
-fn delete_named_columns(names: &mut Vec<NamedRange>, sheet: &str, start: u32, end: u32) {
-    names.retain_mut(|named| {
-        if named.sheet != sheet {
-            return true;
-        }
-        match delete_span((named.range.start_column, named.range.end_column), start, end) {
-            Some((start_column, end_column)) => {
-                named.range.start_column = start_column;
-                named.range.end_column = end_column;
-                true
-            }
-            None => false,
-        }
-    });
+/// Copies a product range into the engine's rectangle type.
+fn shared_range(range: &CellRange) -> document_spreadsheet_formula::CellRange {
+    document_spreadsheet_formula::CellRange {
+        start_row: range.start_row,
+        end_row: range.end_row,
+        start_column: range.start_column,
+        end_column: range.end_column,
+    }
+}
+
+/// Rebuilds a product range from the engine's shifted rectangle.
+fn project_range(range: &document_spreadsheet_formula::CellRange) -> CellRange {
+    CellRange {
+        start_row: range.start_row,
+        end_row: range.end_row,
+        start_column: range.start_column,
+        end_column: range.end_column,
+    }
 }

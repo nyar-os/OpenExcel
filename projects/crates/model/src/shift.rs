@@ -1,11 +1,20 @@
 //! Moves A1 references when whole rows or columns are inserted, deleted or
 //! swapped, or when a range edit shifts a band of cells.
 //!
+//! Plain inserts and deletes are rewritten by `document-spreadsheet-formula`
+//! through [`LineEdit`] and [`shift_references`], so the whole-line rules have
+//! one implementation. Swaps and band edits are product extensions the engine
+//! does not model; they are rewritten here with the same text-scan approach.
+//!
 //! A formula is scanned as text. String literals, error literals, function names,
 //! defined names and worksheet qualifiers stay verbatim. Only references that
 //! point at the edited sheet move; references to other sheets, to another
 //! workbook, or to a 3-D sheet span are left alone. A reference removed by a
 //! deletion becomes `#REF!` instead of being dropped.
+
+use document_spreadsheet_formula::{LineEdit, shift_formula as shift_references};
+
+pub(crate) use document_spreadsheet_formula::Axis;
 
 use crate::{model::Project, reference};
 
@@ -13,15 +22,6 @@ use crate::{model::Project, reference};
 const MAX_ROW: u32 = 1_048_576;
 /// Last column of an XLSX sheet, `XFD`.
 const MAX_COLUMN: u32 = 16_384;
-
-/// Axis one structural edit moves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Axis {
-    /// Rows move; columns stay.
-    Row,
-    /// Columns move; rows stay.
-    Column,
-}
 
 /// How one structural edit moves an axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +102,21 @@ pub(crate) fn shift_project(project: &mut Project, target_sheet: &str, axis: Axi
 /// unqualified reference is local. The returned text is the formula source with
 /// the same leading `=`, if any.
 pub(crate) fn shift_formula(source: &str, target_sheet: &str, host_sheet: &str, axis: Axis, shift: Shift) -> String {
+    // Whole-line inserts and deletes follow the engine's rules. The callers
+    // have already kept the band inside the grid, so the edit always builds.
+    let edit = match shift {
+        Shift::Insert { at, count } => LineEdit::insert(target_sheet, axis, at, count),
+        Shift::Delete { start, end } => LineEdit::delete(target_sheet, axis, start, end - start + 1),
+        Shift::Swap { .. } | Shift::BandInsert { .. } | Shift::BandDelete { .. } => None,
+    };
+    match edit {
+        Some(edit) => shift_references(source, host_sheet, &edit),
+        None => shift_formula_local(source, target_sheet, host_sheet, axis, shift),
+    }
+}
+
+/// Shifts the references of one formula through a product-only swap or band edit.
+fn shift_formula_local(source: &str, target_sheet: &str, host_sheet: &str, axis: Axis, shift: Shift) -> String {
     let chars: Vec<char> = source.chars().collect();
     let mut out = String::with_capacity(source.len());
     let mut index = 0;
@@ -610,13 +625,8 @@ fn rewrite_range(group: &Group, axis: Axis, shift: Shift) -> Transformed {
         return Transformed::Text(text);
     }
     let (low, high) = (first.min(second), first.max(second));
+    // Inserts and deletes are rewritten by the engine; only a swap reaches here.
     let (new_low, new_high, changed) = match shift {
-        Shift::Insert { at, count } => {
-            let move_line = |value: u32| if value >= at { value + count } else { value };
-            let new_low = move_line(low);
-            let new_high = move_line(high);
-            (new_low, new_high, new_low != low || new_high != high)
-        }
         Shift::Swap { first, second } => {
             let swap_line = |value: u32| {
                 if value == first {
@@ -632,25 +642,10 @@ fn rewrite_range(group: &Group, axis: Axis, shift: Shift) -> Transformed {
             let (new_low, new_high) = (swap_line(low).min(swap_line(high)), swap_line(low).max(swap_line(high)));
             (new_low, new_high, new_low != low || new_high != high)
         }
-        Shift::Delete { start, end } => {
-            let count = end - start + 1;
-            if high < start {
-                (low, high, false)
-            }
-            else if low > end {
-                (low - count, high - count, true)
-            }
-            else {
-                let new_low = if low < start { low } else { start };
-                let new_high = if high > end { high - count } else { start - 1 };
-                if new_high < new_low {
-                    return Transformed::Deleted;
-                }
-                (new_low, new_high, new_low != low || new_high != high)
-            }
+        // Whole-line edits return to the engine above; band ranges are rewritten per endpoint.
+        Shift::Insert { .. } | Shift::Delete { .. } | Shift::BandInsert { .. } | Shift::BandDelete { .. } => {
+            return Transformed::Unchanged;
         }
-        // Band shifts return above; whole-line rules never see them here.
-        Shift::BandInsert { .. } | Shift::BandDelete { .. } => unreachable!("band ranges are rewritten per endpoint"),
     };
     if new_high > axis_max(axis) {
         return Transformed::Deleted;

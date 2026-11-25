@@ -1,10 +1,10 @@
 //! Formula evaluation bound to the workbook project.
 //!
-//! The lexer, parser, dependency order and function library live in
-//! `document-spreadsheet-formula`. This module maps the project onto the
-//! engine's read-only workbook view and writes the results back onto the cells,
-//! folding a handful of legacy and dotted Excel spellings onto engine functions
-//! before the formula reaches the engine.
+//! The lexer, parser, dependency order, function library and the legacy and
+//! dotted alias registry live in `document-spreadsheet-formula`. This module
+//! maps the project onto the engine's read-only workbook view and writes the
+//! results back onto the cells; the engine folds aliases such as `CONCATENATE`
+//! onto their canonical implementation at dispatch without touching the text.
 
 use document_spreadsheet_formula::{CellSnapshot, CellValue as SharedValue, FormulaCell, Workbook};
 
@@ -16,92 +16,9 @@ pub(crate) type CellKey = document_spreadsheet_formula::CellKey;
 /// Function names the engine understands, reported through capabilities.
 pub(crate) use document_spreadsheet_formula::FUNCTIONS;
 
-/// Function names this project folds onto an engine function before the formula
-/// reaches the engine, so legacy and dotted Excel spellings compute.
-pub(crate) const FUNCTION_ALIASES: &[(&str, &str)] = &[
-    ("CONCATENATE", "CONCAT"),
-    ("MODE.SNGL", "MODE"),
-    ("STDEV.S", "STDEV"),
-    ("STDEV.P", "STDEVP"),
-    ("VAR.S", "VAR"),
-    ("VAR.P", "VARP"),
-    ("RANK.EQ", "RANK"),
-];
-
 /// Every function name a stored formula may call: engine functions plus aliases.
 pub(crate) fn supported_functions() -> Vec<&'static str> {
-    FUNCTIONS.iter().copied().chain(FUNCTION_ALIASES.iter().map(|(alias, _)| *alias)).collect()
-}
-
-/// Rewrites alias function calls to the engine spelling. String literals,
-/// quoted sheet names and external-reference brackets are copied verbatim, so
-/// only real call sites change; the stored formula keeps its original text.
-pub(crate) fn expand_aliases(source: &str) -> String {
-    let chars: Vec<char> = source.chars().collect();
-    let mut output = String::with_capacity(source.len());
-    let mut index = 0usize;
-    let is_name_char = |value: char| value.is_alphanumeric() || matches!(value, '_' | '.' | '\\');
-    while index < chars.len() {
-        let current = chars[index];
-        if current == '"' {
-            output.push('"');
-            index += 1;
-            while index < chars.len() {
-                if chars[index] == '"' {
-                    output.push('"');
-                    index += 1;
-                    if index < chars.len() && chars[index] == '"' {
-                        output.push('"');
-                        index += 1;
-                    }
-                    else {
-                        break;
-                    }
-                }
-                else {
-                    output.push(chars[index]);
-                    index += 1;
-                }
-            }
-        }
-        else if current == '\'' || current == '[' {
-            let closing = if current == '\'' { '\'' } else { ']' };
-            output.push(current);
-            index += 1;
-            while index < chars.len() && chars[index] != closing {
-                output.push(chars[index]);
-                index += 1;
-            }
-            if index < chars.len() {
-                output.push(chars[index]);
-                index += 1;
-            }
-        }
-        else if is_name_char(current) {
-            let start = index;
-            while index < chars.len() && is_name_char(chars[index]) {
-                index += 1;
-            }
-            let token: String = chars[start..index].iter().collect();
-            let mut probe = index;
-            while probe < chars.len() && chars[probe].is_whitespace() {
-                probe += 1;
-            }
-            if probe < chars.len()
-                && chars[probe] == '('
-                && let Some((_, target)) = FUNCTION_ALIASES.iter().find(|(alias, _)| alias.eq_ignore_ascii_case(&token))
-            {
-                output.push_str(target);
-                continue;
-            }
-            output.push_str(&token);
-        }
-        else {
-            output.push(current);
-            index += 1;
-        }
-    }
-    output
+    FUNCTIONS.iter().copied().chain(document_spreadsheet_formula::FUNCTION_ALIASES.iter().map(|(alias, _)| *alias)).collect()
 }
 
 /// Reads the value a reader should show for one cell.
@@ -116,7 +33,7 @@ pub(crate) fn value_of(cell: &Cell) -> CellValue {
 
 /// Reports whether a formula body parses, without exposing the expression tree.
 pub(crate) fn validate(source: &str) -> Result<(), String> {
-    document_spreadsheet_formula::validate(&expand_aliases(source))
+    document_spreadsheet_formula::validate(source)
 }
 
 /// Recomputes every formula cell and returns how many computed values changed.
@@ -176,7 +93,7 @@ impl Workbook for ProjectView<'_> {
                         sheet: sheet_index,
                         row: cell.row,
                         column: cell.column,
-                        source: expand_aliases(source.trim().trim_start_matches('=')),
+                        source: source.trim().trim_start_matches('=').to_owned(),
                     });
                 }
             }
