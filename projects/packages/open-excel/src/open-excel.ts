@@ -7,7 +7,7 @@
  */
 
 import { OpenExcelError, setErrorLocale } from './errors.js';
-import { formatFromPath, type WorkbookFormat, type WorkbookIntent } from './formats.js';
+import type { WorkbookIntent } from './formats.js';
 import * as service from './service.js';
 import type {
     CellDetail,
@@ -86,7 +86,7 @@ export class OpenExcel {
         if (!('path' in input)) {
             const key = 'bytes' in input ? 'bytes' : 'input';
             throw new OpenExcelError(
-                'format/unsupported',
+                'capability/not-implemented',
                 `opening \`${key}\` needs the package importer; write the project to a path and pass \`path\``,
                 { details: { feature: `open.${key}` } },
             );
@@ -94,9 +94,9 @@ export class OpenExcel {
         const intent: WorkbookIntent = input.intent ?? 'edit';
         if (intent !== 'edit') {
             throw new OpenExcelError(
-                'format/unsupported',
+                'capability/not-implemented',
                 `native projects open for editing; \`${intent}\` needs the data pipeline`,
-                { details: { feature: `open.intent.${intent}`, format: this.formatOf(input.path) } },
+                { details: { feature: `open.intent.${intent}` } },
             );
         }
         const opened = service.open(input.path);
@@ -190,7 +190,7 @@ export class OpenExcel {
         const format = options.format ?? 'svg';
         if (format !== 'svg') {
             throw new OpenExcelError('format/unsupported', `\`${format}\` rendering is not available in this build`, {
-                details: { feature: `render.${format}` },
+                details: { feature: `render.${format}`, format },
             });
         }
         return service.render(this.handleOf(workbook), options);
@@ -233,16 +233,12 @@ export class OpenExcel {
             throw new OpenExcelError('session/disposed', 'the OpenExcel session has been disposed; create a new instance');
         }
     }
-
-    private formatOf(path: string): WorkbookFormat | undefined {
-        return formatFromPath(path);
-    }
 }
 
 function assertProjectPath(input: WorkbookInput): string {
     assertWorkbookInput(input);
     if (!('path' in input)) {
-        throw new OpenExcelError('format/unsupported', 'inspection needs a project path; in-memory packages are not supported yet', {
+        throw new OpenExcelError('capability/not-implemented', 'inspection needs a project path; in-memory packages are not supported yet', {
             details: { feature: 'inspect.bytes' },
         });
     }

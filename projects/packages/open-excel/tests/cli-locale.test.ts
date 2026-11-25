@@ -3,8 +3,8 @@
  *
  * The same failure under both locales must produce the same machine-readable
  * envelope — stable `code`, identical interpolated params and the same exit
- * code — while only the human copy changes. An unknown binding code keeps its
- * machine code even though no catalog carries it.
+ * code — while only the human copy changes. An unknown binding code lands on
+ * the structured `binding/failure` fallback in every locale.
  */
 
 import assert from 'node:assert/strict';
@@ -102,13 +102,15 @@ test('an sdk failure reaches the envelope under its own code in both locales', (
     assert.equal(zh.envelope.error?.message, '未找到 `sheet` `Sheet9`', 'the session locale renders the copy');
 });
 
-test('an unknown code keeps its machine code in every locale', () => {
+test('an unknown code falls back to binding/failure in every locale', () => {
     const failure = { message: 'native text kept', code: 'weird/code' };
     const en = sdkRun('en-US', failure);
     const zh = sdkRun('zh-CN', failure);
     assert.equal(zh.exit, en.exit);
-    assert.equal(en.envelope.error?.code, 'weird/code', 'the fallback keeps the machine code');
-    assert.equal(zh.envelope.error?.code, 'weird/code');
+    assert.equal(en.envelope.error?.code, 'binding/failure', 'an unknown code is structured, not guessed');
+    assert.equal(zh.envelope.error?.code, en.envelope.error?.code);
+    assert.equal(en.envelope.error?.message, 'the native binding reported a failure: native text kept');
+    assert.equal(zh.envelope.error?.message, '原生绑定返回了失败：native text kept');
 });
 
 test('help renders the registered locale catalog', () => {

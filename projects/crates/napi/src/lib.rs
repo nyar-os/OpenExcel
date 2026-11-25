@@ -29,15 +29,17 @@ use wae::{
 };
 
 fn fail(error: ServiceError) -> Error {
-    let mut mapped = Error::new(error.message().to_owned()).code(error.code().to_owned());
-    if !error.params().is_null() {
-        mapped = mapped.detail(json!({ "params": error.params() }));
-    }
-    mapped
+    Error::new(error.message().to_owned())
+        .code(error.code().to_owned())
+        .detail(json!({ "params": error.params_json() }))
+}
+
+fn argument_error(message: impl Into<String>) -> Error {
+    fail(ServiceError::argument(message))
 }
 
 fn argument(ctx: &CallContext, index: usize) -> Result<JsValue> {
-    ctx.args().get(index).copied().ok_or_else(|| Error::new("a required argument is missing").code("session/argument-invalid"))
+    ctx.args().get(index).copied().ok_or_else(|| argument_error("a required argument is missing"))
 }
 
 fn text(ctx: &CallContext, index: usize) -> Result<String> {
@@ -46,8 +48,7 @@ fn text(ctx: &CallContext, index: usize) -> Result<String> {
 
 fn handle(ctx: &CallContext, index: usize) -> Result<u64> {
     let raw = argument(ctx, index)?.as_i64()?;
-    u64::try_from(raw)
-        .map_err(|_| Error::new("the workbook handle must be a non-negative integer").code("session/argument-invalid"))
+    u64::try_from(raw).map_err(|_| argument_error("the workbook handle must be a non-negative integer"))
 }
 
 fn respond(ctx: &CallContext, value: &Value) -> Result<JsValue> {
@@ -56,7 +57,7 @@ fn respond(ctx: &CallContext, value: &Value) -> Result<JsValue> {
 }
 
 fn parse_json(raw: &str) -> Result<Value> {
-    serde_json::from_str(raw).map_err(|error| Error::new(error.to_string()).code("session/argument-invalid"))
+    serde_json::from_str(raw).map_err(|error| argument_error(error.to_string()))
 }
 
 /// Library version of the native binding.
@@ -113,7 +114,7 @@ fn workbook_inspect(ctx: CallContext) -> Result<JsValue> {
                 parsed
                     .as_array()
                     .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
-                    .ok_or_else(|| Error::new("`checks` must be a JSON array").code("session/argument-invalid"))
+                    .ok_or_else(|| argument_error("`checks` must be a JSON array"))
             })?;
             Some(names)
         }
@@ -374,15 +375,11 @@ fn handle_of(value: &Value) -> u64 {
 }
 
 fn service_failure(error: ServiceError) -> Value {
-    let mut payload = json!({ "code": error.code(), "message": error.message() });
-    if !error.params().is_null() {
-        payload["params"] = error.params().clone();
-    }
-    payload
+    json!({ "code": error.code(), "message": error.message(), "params": error.params_json() })
 }
 
 fn argument_failure(message: &str) -> Value {
-    json!({ "code": "session/argument-invalid", "message": message })
+    service_failure(ServiceError::argument(message))
 }
 
 fn call_create(request: &Value) -> std::result::Result<Value, Value> {

@@ -29,6 +29,7 @@ use std::{
 };
 
 use boost_fs::{OverwritePolicy, PublishOptions, publish_bytes_with_options};
+use document_spreadsheet_formula::error::params::ObjectKind;
 use serde_json::{Map, Value, json};
 
 pub use error::ServiceError;
@@ -846,7 +847,7 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
             let before = project.names.len();
             project.names.retain(|named| !named.name.eq_ignore_ascii_case(name));
             if project.names.len() == before {
-                return Err(ServiceError::not_found("defined name", name));
+                return Err(ServiceError::not_found(ObjectKind::DefinedName, name));
             }
             0
         }
@@ -872,7 +873,7 @@ fn apply_operation(project: &mut Project, operation: &Value, affected: &mut Vec<
                 .names
                 .iter()
                 .position(|named| named.name.eq_ignore_ascii_case(name))
-                .ok_or_else(|| ServiceError::not_found("defined name", name))?;
+                .ok_or_else(|| ServiceError::not_found(ObjectKind::DefinedName, name))?;
             if project.names.iter().enumerate().any(|(other, named)| other != index && named.name.eq_ignore_ascii_case(renamed))
             {
                 return Err(ServiceError::argument(format!("defined name `{renamed}` already exists")));
@@ -2994,7 +2995,7 @@ pub(crate) fn missing_sheet(key: &str) -> ServiceError {
         ServiceError::argument("an operation needs a `sheet` name or id")
     }
     else {
-        ServiceError::not_found("sheet", key)
+        ServiceError::not_found(ObjectKind::Sheet, key)
     }
 }
 

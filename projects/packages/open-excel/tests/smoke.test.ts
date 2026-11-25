@@ -267,9 +267,11 @@ test('real binding failures carry the typed params of their code', { skip: insta
             excel.open({ path: join(tmpdir(), 'open-excel-missing-file.oexcel') }),
             (error: unknown) => {
                 assert.ok(error instanceof OpenExcelError);
-                assert.equal(error.code, 'io/read');
-                assert.equal(error.params.kind, 'NotFound');
-                assert.equal(typeof error.params.path, 'string');
+                const failure = error.failure;
+                assert.equal(failure.code, 'io/read');
+                if (failure.code !== 'io/read') return false;
+                assert.equal(failure.params.kind, 'NotFound');
+                assert.equal(typeof failure.params.path, 'string');
                 return true;
             },
         );
@@ -279,9 +281,11 @@ test('real binding failures carry the typed params of their code', { skip: insta
             excel.cell(created, { sheet: 'Nope', address: 'A1' }),
             (error: unknown) => {
                 assert.ok(error instanceof OpenExcelError);
-                assert.equal(error.code, 'object/not-found');
-                assert.equal(error.params.kind, 'sheet');
-                assert.equal(error.params.id, 'Nope');
+                const failure = error.failure;
+                assert.equal(failure.code, 'object/not-found');
+                if (failure.code !== 'object/not-found') return false;
+                assert.equal(failure.params.kind, 'sheet');
+                assert.equal(failure.params.id, 'Nope');
                 return true;
             },
         );
@@ -293,8 +297,10 @@ test('real binding failures carry the typed params of their code', { skip: insta
             excel.save(created, { target }),
             (error: unknown) => {
                 assert.ok(error instanceof OpenExcelError);
-                assert.equal(error.code, 'io/exists');
-                assert.equal(error.params.path, target);
+                const failure = error.failure;
+                assert.equal(failure.code, 'io/exists');
+                if (failure.code !== 'io/exists') return false;
+                assert.equal(failure.params.path, target);
                 return true;
             },
         );
