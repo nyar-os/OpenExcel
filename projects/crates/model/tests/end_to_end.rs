@@ -1981,6 +1981,39 @@ fn sheet_freeze_uses_a_cell_boundary_and_survives_xlsx() {
 }
 
 #[test]
+fn theme_colors_resolve_through_the_pinned_writer_into_the_project() {
+    use document_formats::{
+        export::xlsx::export_xlsx_bytes,
+        import::xlsx::model::{CellStyle as XlsxStyle, CellValue as XlsxValue, XlsxCell, XlsxSheet, XlsxWorkbook},
+    };
+
+    let mut workbook = XlsxWorkbook::new("theme.xlsx");
+    workbook.styles.theme_colors.insert("accent1".to_owned(), "#4472C4".to_owned());
+    let mut sheet = XlsxSheet::new("Sheet1", 0);
+    sheet.cells.push(XlsxCell {
+        reference: "A1".to_owned(),
+        row: 1,
+        column: 1,
+        value: XlsxValue::Text("themed".to_owned()),
+        formula: None,
+        style_index: None,
+        style: XlsxStyle {
+            font_color: Some("theme:4".to_owned()),
+            fill_color: Some("theme:4".to_owned()),
+            ..Default::default()
+        },
+    });
+    workbook.sheets.push(sheet);
+
+    let bytes = export_xlsx_bytes(&workbook).expect("write package");
+    let read = xlsx::read_project("theme.xlsx", &bytes, "Theme").expect("read package");
+    let cell = read.sheet("Sheet1").expect("sheet").cell(1, 1).expect("A1");
+    let style = cell.style.as_ref().expect("resolved style");
+    assert_eq!(style.font_color.as_deref(), Some("#4472C4"));
+    assert_eq!(style.fill.as_deref(), Some("#4472C4"));
+}
+
+#[test]
 fn sheet_freeze_rejects_invalid_boundaries_without_changing_the_document() {
     let created = open_excel_workbook::create(&json!({ "title": "FreezeErrors" })).expect("create");
     let handle = created["handle"].as_u64().expect("handle");
