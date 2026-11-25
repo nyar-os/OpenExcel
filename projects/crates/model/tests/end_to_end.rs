@@ -9,7 +9,10 @@ use std::{
 use serde_json::json;
 
 use open_excel_workbook::{
-    model::{CellRange, CellStyle, CellValue, Freeze, Project, SheetColumn, SheetVisibility},
+    model::{
+        BorderSpec, CellRange, CellStyle, CellStyleBorders, CellValue, DateSystem, Freeze, NamedRange, Project, SheetColumn,
+        SheetVisibility,
+    },
     xlsx,
 };
 
@@ -2203,4 +2206,60 @@ fn hiding_the_last_visible_sheet_is_rejected() {
 
     open_excel_workbook::close(handle).expect("close");
     open_excel_workbook::close(single_handle).expect("close");
+}
+
+#[test]
+fn style_fields_defined_names_and_the_date_epoch_survive_the_xlsx_round_trip() {
+    let mut project = Project::blank("Fidelity");
+    project.date_system = DateSystem::Date1904;
+    let sheet = &mut project.sheets[0];
+    sheet.write_cell(1, 1, CellValue::text("styled"), None, None);
+    sheet.cells[0].style = Some(CellStyle {
+        underline: Some(true),
+        strike: Some(true),
+        font_name: Some("Consolas".to_owned()),
+        vertical: Some("center".to_owned()),
+        number_format: Some("#,##0".to_owned()),
+        number_format_id: Some(3),
+        borders: Some(CellStyleBorders {
+            top: Some(BorderSpec { style: "thin".to_owned(), color: Some("#FF0000".to_owned()) }),
+            bottom: Some(BorderSpec { style: "medium".to_owned(), color: None }),
+            ..CellStyleBorders::default()
+        }),
+        ..CellStyle::default()
+    });
+    project.names.push(NamedRange {
+        name: "Sales".to_owned(),
+        sheet: "sheet-1".to_owned(),
+        range: CellRange::between(1, 1, 4, 3),
+    });
+    project.names.push(NamedRange {
+        name: "Unit Price".to_owned(),
+        sheet: "sheet-1".to_owned(),
+        range: CellRange::between(2, 2, 2, 2),
+    });
+
+    let bytes = xlsx::write_package(&project).expect("write package");
+    let read = xlsx::read_project("fidelity.xlsx", &bytes, "Fidelity").expect("read package");
+
+    assert_eq!(read.date_system, DateSystem::Date1904, "the 1904 epoch is written back");
+    let style = read.sheet("Sheet1").expect("sheet").cell(1, 1).expect("A1").style.clone().expect("style");
+    assert_eq!(style.underline, Some(true));
+    assert_eq!(style.strike, Some(true));
+    assert_eq!(style.font_name.as_deref(), Some("Consolas"));
+    assert_eq!(style.vertical.as_deref(), Some("center"));
+    assert_eq!(style.number_format.as_deref(), Some("#,##0"));
+    assert_eq!(style.number_format_id, Some(3), "the built-in id survives instead of a fresh custom id");
+    let borders = style.borders.expect("borders");
+    assert_eq!(borders.top.as_ref().map(|edge| (edge.style.as_str(), edge.color.as_deref())), Some(("thin", Some("#FF0000"))));
+    assert_eq!(borders.bottom.as_ref().map(|edge| (edge.style.as_str(), edge.color.as_deref())), Some(("medium", None)));
+    assert!(borders.right.is_none() && borders.left.is_none(), "unwritten edges stay absent");
+
+    assert_eq!(read.names.len(), 2, "both defined names come back");
+    let sales = read.names.iter().find(|named| named.name == "Sales").expect("Sales");
+    assert_eq!(sales.sheet, "sheet-1");
+    assert_eq!(sales.range, CellRange::between(1, 1, 4, 3));
+    let unit = read.names.iter().find(|named| named.name == "Unit Price").expect("Unit Price");
+    assert_eq!(unit.sheet, "sheet-1");
+    assert_eq!(unit.range, CellRange::between(2, 2, 2, 2));
 }
