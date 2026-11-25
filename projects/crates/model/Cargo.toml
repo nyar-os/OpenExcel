@@ -9,10 +9,10 @@ repository.workspace = true
 description = "Workbook model, format conversion, inspection and export for OpenExcel"
 
 [dependencies]
-boost-fs = { git = "https://github.com/oovm/rust-boost", rev = "4e2d54960c81fd44f9a3d9adb06d5e5c8e2f9a87", default-features = false }
-data-text-csv = { git = "https://github.com/oovm/rust-boost", rev = "4e2d54960c81fd44f9a3d9adb06d5e5c8e2f9a87" }
-document-formats = { git = "https://github.com/oovm/rust-boost", rev = "4e2d54960c81fd44f9a3d9adb06d5e5c8e2f9a87", default-features = false, features = ["xlsx"] }
-document-session = { git = "https://github.com/oovm/rust-boost", rev = "4e2d54960c81fd44f9a3d9adb06d5e5c8e2f9a87" }
-document-spreadsheet-formula = { git = "https://github.com/oovm/rust-boost", rev = "4e2d54960c81fd44f9a3d9adb06d5e5c8e2f9a87" }
+boost-fs = { git = "https://github.com/oovm/rust-boost", rev = "1dd547270ef3410e573fad2a00b0814e20f24b20", default-features = false }
+data-text-csv = { git = "https://github.com/oovm/rust-boost", rev = "1dd547270ef3410e573fad2a00b0814e20f24b20" }
+document-formats = { git = "https://github.com/oovm/rust-boost", rev = "1dd547270ef3410e573fad2a00b0814e20f24b20", default-features = false, features = ["xlsx"] }
+document-session = { git = "https://github.com/oovm/rust-boost", rev = "1dd547270ef3410e573fad2a00b0814e20f24b20" }
+document-spreadsheet-formula = { git = "https://github.com/oovm/rust-boost", rev = "1dd547270ef3410e573fad2a00b0814e20f24b20" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true }
