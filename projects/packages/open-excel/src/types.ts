@@ -334,12 +334,32 @@ export type CellInput = CellValueInput | { readonly formula: string; readonly va
 export interface CellStyleInput {
     readonly bold?: boolean;
     readonly italic?: boolean;
+    readonly underline?: boolean;
+    readonly strike?: boolean;
+    readonly fontName?: string;
     readonly fontSize?: number;
     readonly fontColor?: string;
     readonly fill?: string;
     readonly numberFormat?: string;
+    readonly numberFormatId?: number;
     readonly align?: 'left' | 'center' | 'right' | 'justify' | 'distribute' | 'fill';
+    readonly vertical?: 'top' | 'center' | 'justify' | 'distribute';
     readonly wrap?: boolean;
+    readonly borders?: CellStyleBordersInput;
+}
+
+/** The four border edges accepted by `format.set`. */
+export interface CellStyleBordersInput {
+    readonly top?: BorderInput;
+    readonly right?: BorderInput;
+    readonly bottom?: BorderInput;
+    readonly left?: BorderInput;
+}
+
+/** One border edge: an Office style name such as `thin` plus an optional color. */
+export interface BorderInput {
+    readonly style: string;
+    readonly color?: string;
 }
 
 /** Sheet tab visibility accepted by `sheet.setVisibility`. */

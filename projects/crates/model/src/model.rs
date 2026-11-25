@@ -33,6 +33,9 @@ pub struct Project {
     /// Workbook-scope defined names bound to sheet rectangles.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub names: Vec<NamedRange>,
+    /// Workbook date epoch kept from the source package.
+    #[serde(default)]
+    pub date_system: DateSystem,
 }
 
 impl Project {
@@ -45,6 +48,7 @@ impl Project {
             styles: Styles::default(),
             sheets: vec![Sheet::new("sheet-1", "Sheet1", 0)],
             names: Vec::new(),
+            date_system: DateSystem::default(),
         }
     }
 
@@ -123,6 +127,18 @@ pub struct NamedRange {
     pub sheet: String,
     /// Rectangle the name resolves to.
     pub range: CellRange,
+}
+
+/// Workbook date epoch recorded by the source package.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DateSystem {
+    /// The 1900 date system used by Windows Excel.
+    #[serde(rename = "1900")]
+    #[default]
+    Date1900,
+    /// The 1904 date system used by legacy Mac Excel.
+    #[serde(rename = "1904")]
+    Date1904,
 }
 
 /// Style tables kept with the project.
@@ -479,6 +495,15 @@ pub struct CellStyle {
     /// Italic font.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub italic: Option<bool>,
+    /// Underlined font.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub underline: Option<bool>,
+    /// Struck-through font.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strike: Option<bool>,
+    /// Font family name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_name: Option<String>,
     /// Font size in points.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<f32>,
@@ -491,12 +516,57 @@ pub struct CellStyle {
     /// Number format code.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub number_format: Option<String>,
+    /// Built-in number format id declared by the source style table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number_format_id: Option<u32>,
     /// Horizontal alignment: `left`, `center`, `right`, `justify`, `distribute` or `fill`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub align: Option<String>,
+    /// Vertical alignment: `top`, `center`, `justify` or `distribute`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vertical: Option<String>,
     /// Whether the cell wraps text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrap: Option<bool>,
+    /// Border edges drawn around the cell.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub borders: Option<CellStyleBorders>,
+}
+
+/// Four border edges of one cell style.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CellStyleBorders {
+    /// Top edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top: Option<BorderSpec>,
+    /// Right edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub right: Option<BorderSpec>,
+    /// Bottom edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bottom: Option<BorderSpec>,
+    /// Left edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left: Option<BorderSpec>,
+}
+
+impl CellStyleBorders {
+    /// Whether no edge carries a visible border.
+    pub fn is_empty(&self) -> bool {
+        self.top.is_none() && self.right.is_none() && self.bottom.is_none() && self.left.is_none()
+    }
+}
+
+/// One border edge: an Office border style name and an optional color.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BorderSpec {
+    /// Office border style name such as `thin` or `medium`.
+    pub style: String,
+    /// Border color as a `#RRGGBB` string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 impl CellStyle {
@@ -507,9 +577,26 @@ impl CellStyle {
 
     /// Stable deduplication key.
     pub fn key(&self) -> String {
+        let borders = self
+            .borders
+            .as_ref()
+            .map(|borders| format!("{:?}{:?}{:?}{:?}", borders.top, borders.right, borders.bottom, borders.left));
         format!(
-            "b{:?}i{:?}s{:?}c{:?}f{:?}n{:?}a{:?}w{:?}",
-            self.bold, self.italic, self.font_size, self.font_color, self.fill, self.number_format, self.align, self.wrap
+            "b{:?}i{:?}u{:?}k{:?}f{:?}s{:?}c{:?}l{:?}n{:?}m{:?}a{:?}v{:?}w{:?}r{:?}",
+            self.bold,
+            self.italic,
+            self.underline,
+            self.strike,
+            self.font_name,
+            self.font_size,
+            self.font_color,
+            self.fill,
+            self.number_format,
+            self.number_format_id,
+            self.align,
+            self.vertical,
+            self.wrap,
+            borders
         )
     }
 }

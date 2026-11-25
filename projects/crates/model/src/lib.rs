@@ -615,6 +615,24 @@ fn verify_xlsx(project: &Project, bytes: &[u8]) -> Result<(), ServiceError> {
             }
         }
     }
+    if readback.names.len() != project.names.len() {
+        return Err(ServiceError::io(format!(
+            "the written XLSX package kept {} of {} defined names",
+            readback.names.len(),
+            project.names.len()
+        )));
+    }
+    for named in &project.names {
+        let sheet_name = project.sheets.iter().find(|sheet| sheet.id == named.sheet).map(|sheet| sheet.name.clone());
+        let kept = readback.names.iter().any(|read| {
+            read.name == named.name
+                && read.range == named.range
+                && readback.sheets.iter().find(|sheet| sheet.id == read.sheet).map(|sheet| sheet.name.clone()) == sheet_name
+        });
+        if !kept {
+            return Err(ServiceError::io(format!("the written XLSX package changed the defined name `{}`", named.name)));
+        }
+    }
     Ok(())
 }
 
@@ -2806,17 +2824,57 @@ fn style_from_json(value: &Value) -> Result<model::CellStyle, ServiceError> {
     let style = model::CellStyle {
         bold: optional_bool(object, "bold")?,
         italic: optional_bool(object, "italic")?,
+        underline: optional_bool(object, "underline")?,
+        strike: optional_bool(object, "strike")?,
+        font_name: optional_string(object, "fontName")?,
         font_size: optional_f32(object, "fontSize")?,
         font_color: optional_string(object, "fontColor")?,
         fill: optional_string(object, "fill")?,
         number_format: optional_string(object, "numberFormat")?,
+        number_format_id: match object.get("numberFormatId") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .and_then(|id| u32::try_from(id).ok())
+                    .ok_or_else(|| ServiceError::argument("`numberFormatId` must be a non-negative integer"))?,
+            ),
+        },
         align: optional_string(object, "align")?,
+        vertical: optional_string(object, "vertical")?,
         wrap: optional_bool(object, "wrap")?,
+        borders: borders_from_json(object.get("borders"))?,
     };
     if style.is_empty() {
         return Err(ServiceError::argument("`format.set` needs at least one style property"));
     }
     Ok(style)
+}
+
+/// Parses the `borders` object of a `format.set` style payload.
+fn borders_from_json(value: Option<&Value>) -> Result<Option<model::CellStyleBorders>, ServiceError> {
+    let Some(value) = value.filter(|value| !value.is_null())
+    else {
+        return Ok(None);
+    };
+    let object = value.as_object().ok_or_else(|| ServiceError::argument("`borders` must be an object of edges"))?;
+    let edge = |key: &str| -> Result<Option<model::BorderSpec>, ServiceError> {
+        match object.get(key).filter(|edge| !edge.is_null()) {
+            None => Ok(None),
+            Some(edge) => {
+                let edge = edge.as_object().ok_or_else(|| ServiceError::argument("`borders` edges must be objects"))?;
+                let style = optional_string(edge, "style")?
+                    .ok_or_else(|| ServiceError::argument("a border edge needs a `style` such as `thin`"))?;
+                Ok(Some(model::BorderSpec { style, color: optional_string(edge, "color")? }))
+            }
+        }
+    };
+    let borders =
+        model::CellStyleBorders { top: edge("top")?, right: edge("right")?, bottom: edge("bottom")?, left: edge("left")? };
+    if borders.is_empty() {
+        return Err(ServiceError::argument("`borders` needs at least one edge"));
+    }
+    Ok(Some(borders))
 }
 
 /// Resolves the number format code a `format.number` request asks for.
@@ -2901,12 +2959,18 @@ fn merge_style(existing: Option<&model::CellStyle>, incoming: &model::CellStyle)
     model::CellStyle {
         bold: incoming.bold.or(base.bold),
         italic: incoming.italic.or(base.italic),
+        underline: incoming.underline.or(base.underline),
+        strike: incoming.strike.or(base.strike),
+        font_name: incoming.font_name.clone().or(base.font_name),
         font_size: incoming.font_size.or(base.font_size),
         font_color: incoming.font_color.clone().or(base.font_color),
         fill: incoming.fill.clone().or(base.fill),
         number_format: incoming.number_format.clone().or(base.number_format),
+        number_format_id: incoming.number_format_id.or(base.number_format_id),
         align: incoming.align.clone().or(base.align),
+        vertical: incoming.vertical.clone().or(base.vertical),
         wrap: incoming.wrap.or(base.wrap),
+        borders: incoming.borders.clone().or(base.borders),
     }
 }
 

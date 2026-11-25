@@ -11,7 +11,8 @@ use document_formats::{
     import::xlsx::{
         import_xlsx_bytes,
         model::{
-            CellFormula, CellRange as XlsxRange, CellStyle as XlsxStyle, CellValue as XlsxValue, FormulaKind, FreezePane,
+            BorderEdge as XlsxBorderEdge, BorderEdges as XlsxBorderEdges, CellFormula, CellRange as XlsxRange,
+            CellStyle as XlsxStyle, CellValue as XlsxValue, DateSystem as XlsxDateSystem, DefinedName, FormulaKind, FreezePane,
             HorizontalAlign, SheetColumn as XlsxColumn, SheetRow as XlsxRow, SheetVisibility as XlsxVisibility, VerticalAlign,
             XlsxCell, XlsxSheet, XlsxWorkbook,
         },
@@ -21,9 +22,10 @@ use document_formats::{
 use crate::{
     error::ServiceError,
     model::{
-        Cell, CellRange, CellStyle, CellValue, ComputedState, Freeze, Project, Sheet, SheetColumn, SheetRow, SheetVisibility,
-        Styles,
+        BorderSpec, Cell, CellRange, CellStyle, CellStyleBorders, CellValue, ComputedState, DateSystem, Freeze, NamedRange,
+        Project, Sheet, SheetColumn, SheetRow, SheetVisibility, Styles,
     },
+    reference,
 };
 
 /// Reads an XLSX/XLSM package into the project model.
@@ -34,7 +36,7 @@ pub fn read_project(label: &str, bytes: &[u8], title: impl Into<String>) -> Resu
 
 /// Projects the format-native workbook into the editable project model.
 pub fn project_from_workbook(workbook: XlsxWorkbook, title: impl Into<String>) -> Project {
-    let sheets = workbook
+    let sheets: Vec<Sheet> = workbook
         .sheets
         .into_iter()
         .enumerate()
@@ -114,16 +116,52 @@ pub fn project_from_workbook(workbook: XlsxWorkbook, title: impl Into<String>) -
         }
     }
 
+    let names = workbook.defined_names.iter().filter_map(|defined| named_range(defined, &sheets)).collect();
+
     let mut project = Project {
         format: crate::model::PROJECT_FORMAT.to_owned(),
         version: crate::model::PROJECT_VERSION,
         title: title.into(),
         styles: Styles { number_formats, cell_formats },
         sheets,
-        names: Vec::new(),
+        names,
+        date_system: match workbook.date_system {
+            XlsxDateSystem::Date1900 => DateSystem::Date1900,
+            XlsxDateSystem::Date1904 => DateSystem::Date1904,
+        },
     };
     project.reindex();
     project
+}
+
+/// Resolves one authored defined name to a sheet rectangle, dropping names whose
+/// payload is not a range or does not point at a sheet of this workbook.
+fn named_range(defined: &DefinedName, sheets: &[Sheet]) -> Option<NamedRange> {
+    let (prefix, range_text) = match defined.reference.split_once('!') {
+        Some((sheet, range)) => (Some(unquote_sheet(sheet)), range),
+        None => (None, defined.reference.as_str()),
+    };
+    let range = reference::parse_range(range_text)?;
+    let key = prefix.as_deref().or(defined.sheet.as_deref())?;
+    let sheet = sheets.iter().find(|sheet| sheet.name.eq_ignore_ascii_case(key.trim()))?;
+    Some(NamedRange { name: defined.name.clone(), sheet: sheet.id.clone(), range })
+}
+
+/// Strips the surrounding quotes of a sheet prefix and unescapes doubled quotes.
+fn unquote_sheet(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.len() >= 2 && trimmed.starts_with('\'') && trimmed.ends_with('\'') {
+        trimmed[1..trimmed.len() - 1].replace("''", "'")
+    }
+    else {
+        trimmed.to_owned()
+    }
+}
+
+/// Quotes a sheet name for an A1 reference unless every character is plain.
+fn quote_sheet(name: &str) -> String {
+    let plain = !name.is_empty() && name.chars().all(|character| character.is_ascii_alphanumeric() || character == '_');
+    if plain { name.to_owned() } else { format!("'{}'", name.replace('\'', "''")) }
 }
 
 fn range_from(range: document_formats::import::xlsx::model::CellRange) -> CellRange {
@@ -151,10 +189,14 @@ fn style_from_xlsx(style: &XlsxStyle) -> Option<CellStyle> {
     let projected = CellStyle {
         bold: style.bold.then_some(true),
         italic: style.italic.then_some(true),
+        underline: style.underline.then_some(true),
+        strike: style.strike.then_some(true),
+        font_name: style.font_name.clone(),
         font_size: style.font_size,
         font_color: style.font_color.clone(),
         fill: style.fill_color.clone(),
         number_format: style.number_format.clone(),
+        number_format_id: (style.number_format_id != 0).then_some(style.number_format_id),
         align: match style.horizontal {
             HorizontalAlign::General => None,
             HorizontalAlign::Left => Some("left".to_owned()),
@@ -164,9 +206,31 @@ fn style_from_xlsx(style: &XlsxStyle) -> Option<CellStyle> {
             HorizontalAlign::Distributed => Some("distribute".to_owned()),
             HorizontalAlign::Fill => Some("fill".to_owned()),
         },
+        vertical: match style.vertical {
+            VerticalAlign::Top => Some("top".to_owned()),
+            VerticalAlign::Center => Some("center".to_owned()),
+            VerticalAlign::Justify => Some("justify".to_owned()),
+            VerticalAlign::Distributed => Some("distribute".to_owned()),
+            VerticalAlign::Bottom => None,
+        },
         wrap: style.wrap_text.then_some(true),
+        borders: borders_from(&style.borders),
     };
     (!projected.is_empty()).then_some(projected)
+}
+
+fn border_edge(edge: Option<&XlsxBorderEdge>) -> Option<BorderSpec> {
+    edge.map(|edge| BorderSpec { style: edge.style.clone(), color: edge.color.clone() })
+}
+
+fn borders_from(borders: &XlsxBorderEdges) -> Option<CellStyleBorders> {
+    let written = CellStyleBorders {
+        top: border_edge(borders.top.as_ref()),
+        right: border_edge(borders.right.as_ref()),
+        bottom: border_edge(borders.bottom.as_ref()),
+        left: border_edge(borders.left.as_ref()),
+    };
+    (!written.is_empty()).then_some(written)
 }
 
 fn normalize_formula(source: &str) -> String {
@@ -183,6 +247,25 @@ pub fn write_package(project: &Project) -> Result<Vec<u8>, ServiceError> {
 /// Maps the editable project back onto the format-native workbook.
 fn workbook_from_project(project: &Project) -> XlsxWorkbook {
     let mut workbook = XlsxWorkbook::new(&project.title);
+    workbook.date_system = match project.date_system {
+        DateSystem::Date1900 => XlsxDateSystem::Date1900,
+        DateSystem::Date1904 => XlsxDateSystem::Date1904,
+    };
+    workbook.defined_names = project
+        .names
+        .iter()
+        .filter_map(|named| {
+            let sheet = project.sheets.iter().find(|sheet| sheet.id == named.sheet)?;
+            let range = &named.range;
+            let start = format!("${}${}", reference::column_name(range.start_column), range.start_row);
+            let end = format!("${}${}", reference::column_name(range.end_column), range.end_row);
+            Some(DefinedName {
+                name: named.name.clone(),
+                sheet: None,
+                reference: format!("{}!{start}:{end}", quote_sheet(&sheet.name)),
+            })
+        })
+        .collect();
     workbook.sheets = project
         .sheets
         .iter()
@@ -285,14 +368,39 @@ fn style_to_xlsx(style: Option<&CellStyle>) -> XlsxStyle {
     XlsxStyle {
         bold: style.bold.unwrap_or(false),
         italic: style.italic.unwrap_or(false),
+        underline: style.underline.unwrap_or(false),
+        strike: style.strike.unwrap_or(false),
+        font_name: style.font_name.clone(),
         font_size: style.font_size,
         font_color: style.font_color.clone(),
         fill_color: style.fill.clone(),
         number_format: style.number_format.clone(),
+        number_format_id: style.number_format_id.unwrap_or(0),
         horizontal: align_to(style.align.as_deref()),
         wrap_text: style.wrap.unwrap_or(false),
-        vertical: VerticalAlign::Bottom,
-        ..XlsxStyle::default()
+        vertical: vertical_to(style.vertical.as_deref()),
+        borders: borders_to(style.borders.as_ref()),
+    }
+}
+
+fn borders_to(borders: Option<&CellStyleBorders>) -> XlsxBorderEdges {
+    let edge =
+        |spec: Option<&BorderSpec>| spec.map(|spec| XlsxBorderEdge { style: spec.style.clone(), color: spec.color.clone() });
+    XlsxBorderEdges {
+        top: edge(borders.and_then(|borders| borders.top.as_ref())),
+        right: edge(borders.and_then(|borders| borders.right.as_ref())),
+        bottom: edge(borders.and_then(|borders| borders.bottom.as_ref())),
+        left: edge(borders.and_then(|borders| borders.left.as_ref())),
+    }
+}
+
+fn vertical_to(vertical: Option<&str>) -> VerticalAlign {
+    match vertical {
+        Some("top") => VerticalAlign::Top,
+        Some("center") => VerticalAlign::Center,
+        Some("justify") => VerticalAlign::Justify,
+        Some("distribute") => VerticalAlign::Distributed,
+        _ => VerticalAlign::Bottom,
     }
 }
 
