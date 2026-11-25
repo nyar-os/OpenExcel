@@ -65,7 +65,7 @@ pnpm --filter @wae/open-excel-ui run serve   # local preview
 
 Cross-repository dependencies pin a full 40-character revision, not a branch or tag:
 
-- `projects/crates/model/Cargo.toml` pins `boost-fs`, `data-text-csv`, `document-formats`, `document-session` and `document-spreadsheet-formula` to `1dd547270ef3410e573fad2a00b0814e20f24b20` from `oovm/rust-boost`.
+- `projects/crates/model/Cargo.toml` pins `boost-fs`, `data-text-csv`, `document-formats`, `document-session` and `document-spreadsheet-formula` to `0ece26c987992326cfb768934183e99ae473a118` from `oovm/rust-boost`.
 - The workspace `Cargo.toml` pins `wae` to `f92f818fde7174154d77a87b55a5e44b367034c9` from `doki-land/wae-framework`.
 
 The formula engine lives in `document-spreadsheet-formula`. Its function list is surfaced through `capabilities().formulas.functions`, and unknown functions keep the cached source value (`unsupportedBehavior: "preserve-cached"`). Treat a boost revision bump as a behavior change: move every boost pin together, rerun `cargo test -p open-excel-workbook`, and re-read the capability matrix before updating user documentation. The `u` script in the root `package.json` runs `cargo upgrade --workspace`.
